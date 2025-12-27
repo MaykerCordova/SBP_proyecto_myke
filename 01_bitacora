@@ -1,0 +1,404 @@
+import win32com.client
+import pandas as pd
+import os
+import re
+import sqlite3
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+# ==========================================
+# 1. CONFIGURACIÓN
+# ==========================================
+CONFIG = {
+    "RUTA_EXCEL": r"C:\Users\jcordova\Scotiabank\Fraude\Bitacora_Master.xlsx",
+    "RUTA_DB_SQLITE": r"C:\Users\jcordova\Scotiabank\Fraude\Respaldo_Blindado.db",
+    "RUTA_BACKUP_MSG": r"C:\Users\jcordova\Scotiabank\Fraude\Evidencia_Correos",
+    "FOLDER_SOLICITUDES": "Bitacora_Solicitudes",
+    "FOLDER_RESPUESTAS": "Bitacora_Respuestas",
+    "REGEX_ID": r"\[(ID-[\w-]+)\]"
+}
+
+# ==========================================
+# 2. LÓGICA DE NEGOCIO (ESTIMACIÓN AUTOMÁTICA)
+# ==========================================
+MAPA_ESTIMACION = {
+    "PMFD SBP": "15:01",
+    "PMFD SCB": "15:01",
+    "CORE SBP": "N/A",
+    "CORE SCB": "N/A",
+    "ITC SBP": "N/A",
+    "ITC SCB": "N/A",
+    "RT TD": "5:01",
+    "RT TC": "5:01",
+    "VRM SBP": "5:01",
+    "VRM SCB": "5:01",
+    "VCAS SBP": "5:01",
+    "VCAS SCB": "5:01",
+    "FRM SBP": "5:01",
+    "FRM SCB": "5:01"
+}
+
+def calcular_estimacion(herramienta):
+    h_clean = str(herramienta).strip().upper()
+    for key, value in MAPA_ESTIMACION.items():
+        if key in h_clean:
+            return value
+    return "ND"
+
+# ==========================================
+# 3. GESTOR DE BASE DE DATOS (SQLITE)
+# ==========================================
+class GestorBackupSQL:
+    def __init__(self, ruta_db):
+        self.ruta_db = ruta_db
+        self.conectar_y_crear_tabla()
+
+    def conectar_y_crear_tabla(self):
+        os.makedirs(os.path.dirname(self.ruta_db), exist_ok=True)
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                # Esquema actualizado: Agregamos Mes_Revision y Anio_Revision
+                sql_create = """
+                CREATE TABLE IF NOT EXISTS Bitacora (
+                    Nro_Correlativo INTEGER,
+                    Fecha TEXT,
+                    Hora TEXT,
+                    Codigo_Generado TEXT,
+                    Maker TEXT,
+                    Solicitado_Por TEXT,
+                    Herramienta TEXT,
+                    Accion TEXT,
+                    Institucion TEXT,
+                    Codigo_Condicion TEXT,
+                    Nombre_Condicion TEXT,
+                    Estatus_Condicion TEXT,
+                    Tipo_Condicion TEXT,
+                    Consideraciones TEXT,
+                    Objetivo TEXT,
+                    Estimacion TEXT,
+                    Sustento TEXT,
+                    Checker TEXT,
+                    Fecha_Revision TEXT,
+                    Hora_Revision TEXT,
+                    Mes_Revision TEXT,
+                    Anio_Revision TEXT,
+                    Enviado_Jefatura TEXT,
+                    Conformidad TEXT,
+                    Canal TEXT,
+                    ID_Sistema TEXT PRIMARY KEY
+                )
+                """
+                cursor.execute(sql_create)
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️ Error SQL Init: {e}")
+
+    def insertar_solicitud(self, datos):
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                sql = """
+                INSERT OR IGNORE INTO Bitacora 
+                VALUES (:Nro_Correlativo, :Fecha, :Hora, :Codigo_Generado, :Maker, :Solicitado_Por,
+                        :Herramienta, :Accion, :Institucion, :Codigo_Condicion, 
+                        :Nombre_Condicion, :Estatus_Condicion, :Tipo_Condicion, :Consideraciones, 
+                        :Objetivo, :Estimacion, :Sustento, :Checker, :Fecha_Revision, :Hora_Revision,
+                        :Mes_Revision, :Anio_Revision, :Enviado_Jefatura, :Conformidad, :Canal, 
+                        :ID_Sistema)
+                """
+                cursor.execute(sql, datos)
+                conn.commit()
+                print("   💾 [SQLite] Registro insertado.")
+        except Exception as e:
+            print(f"⚠️ Error SQL Insert: {e}")
+
+    def actualizar_aprobacion(self, id_sistema, checker, fecha_rev, hora_rev, mes_rev, anio_rev):
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                # Actualizamos Checker, Fechas y Mes/Año
+                sql = """
+                UPDATE Bitacora 
+                SET Conformidad = 'Completado', 
+                    Checker = ?, 
+                    Fecha_Revision = ?, 
+                    Hora_Revision = ?,
+                    Mes_Revision = ?,
+                    Anio_Revision = ?
+                WHERE ID_Sistema = ?
+                """
+                cursor.execute(sql, (checker, fecha_rev, hora_rev, mes_rev, anio_rev, id_sistema))
+                conn.commit()
+                print("   💾 [SQLite] Aprobación actualizada.")
+        except Exception as e:
+            print(f"⚠️ Error SQL Update: {e}")
+
+# ==========================================
+# 4. DISEÑO Y FORMATO
+# ==========================================
+def embellecer_excel(ruta_excel):
+    try:
+        wb = load_workbook(ruta_excel)
+        ws = wb.active
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="0079C1", end_color="0079C1", fill_type="solid")
+        center_align = Alignment(horizontal='center', vertical='center')
+        
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+
+        ws.auto_filter.ref = ws.dimensions
+
+        for column in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_len: max_len = len(str(cell.value))
+                except: pass
+            
+            ancho = min((max_len + 2), 50)
+            ws.column_dimensions[col_letter].width = ancho
+
+        wb.save(ruta_excel)
+        print("✨ [Excel] Diseño aplicado.")
+    except Exception as e:
+        print(f"⚠️ Error Diseño: {e}")
+
+# ==========================================
+# 5. CLASES DE GESTIÓN
+# ==========================================
+class HerramientasOutlook:
+    def __init__(self):
+        try:
+            self.outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+            self.inbox = self.outlook.GetDefaultFolder(6)
+        except: print("Error conectando a Outlook.")
+
+    def buscar_carpeta(self, nombre):
+        try: return self.inbox.Folders[nombre]
+        except:
+            try: return self.outlook.Folders[nombre]
+            except: return None
+
+    def guardar_msg(self, mail, nombre):
+        if not os.path.exists(CONFIG["RUTA_BACKUP_MSG"]): os.makedirs(CONFIG["RUTA_BACKUP_MSG"])
+        clean_name = re.sub(r'[\\/*?:"<>|]', "_", nombre)
+        ruta = os.path.join(CONFIG["RUTA_BACKUP_MSG"], f"{clean_name}.msg")
+        try:
+            mail.SaveAs(ruta)
+            return ruta
+        except: return "Error guardando MSG"
+
+class ProcesadorTexto:
+    @staticmethod
+    def extraer_id(asunto):
+        match = re.search(CONFIG["REGEX_ID"], asunto)
+        return match.group(1).upper() if match else None
+
+    @staticmethod
+    def parsear_cuerpo(cuerpo):
+        datos = {}
+        patrones = {
+            "Solicitado_Por": r"(?i)SOLICITADO\s*POR:\s*(.*)",
+            "Herramienta": r"(?i)HERRAMIENTA:\s*(.*)",
+            "Accion": r"(?i)ACCION:\s*(.*)",
+            "Institucion": r"(?i)INSTITUCI[OÓ]N:\s*(.*)",
+            "Codigo_Condicion": r"(?i)C[OÓ]DIGO\s*(?:DE)?\s*CONDICI[OÓ]N:\s*(.*)",
+            "Nombre_Condicion": r"(?i)NOMBRE\s*(?:DE)?\s*CONDICI[OÓ]N:\s*(.*)",
+            "Estatus_Condicion": r"(?i)ESTATUS\s*(?:DE)?\s*CONDICI[OÓ]N:\s*(.*)",
+            "Tipo_Condicion": r"(?i)TIPO\s*(?:DE)?\s*CONDICI[OÓ]N:\s*(.*)",
+            "Canal": r"(?i)CANAL:\s*(.*)",
+            "Consideraciones": r"(?i)CONSIDERACIONES:\s*(.*)",
+            "Objetivo": r"(?i)OBJETIVO:\s*(.*)"
+        }
+        for k, v in patrones.items():
+            match = re.search(v, cuerpo)
+            datos[k] = match.group(1).strip().replace('\r', '') if match else "-"
+        return datos
+
+class GestorBitacora:
+    def __init__(self):
+        self.ruta = CONFIG["RUTA_EXCEL"]
+        # LISTA DE COLUMNAS ACTUALIZADA
+        self.columnas = [
+            "Nro_Correlativo",      # 1
+            "Fecha",                # 2
+            "Hora",                 # 3
+            "Codigo_Generado",      # 4
+            "Maker",                # 5
+            "Solicitado_Por",       # 6
+            "Herramienta",          # 7
+            "Accion",               # 8
+            "Institucion",          # 9
+            "Codigo_Condicion",     # 10
+            "Nombre_Condicion",     # 11
+            "Estatus_Condicion",    # 12
+            "Tipo_Condicion",       # 13
+            "Consideraciones",      # 14
+            "Objetivo",             # 15
+            "Estimacion",           # 16 (Auto)
+            "Sustento",             # 17
+            "Checker",              # 18
+            "Fecha_Revision",       # 19
+            "Hora_Revision",        # 20
+            "Mes_Revision",         # 21 (NUEVO)
+            "Anio_Revision",        # 22 (NUEVO)
+            "Enviado_Jefatura",     # 23
+            "Conformidad",          # 24
+            "Canal",                # 25
+            "ID_Sistema"            # 26 (Oculto)
+        ]
+        self.cargar_excel()
+
+    def cargar_excel(self):
+        os.makedirs(os.path.dirname(self.ruta), exist_ok=True)
+        if os.path.exists(self.ruta):
+            try: self.df = pd.read_excel(self.ruta)
+            except: self.df = None; print("⛔ CIERRA EL EXCEL PRIMERO.")
+        else:
+            self.df = pd.DataFrame(columns=self.columnas)
+
+    def guardar(self):
+        if self.df is not None:
+            try: self.df.to_excel(self.ruta, index=False)
+            except: print("❌ Error guardando Excel.")
+
+    def obtener_correlativo(self):
+        if self.df is None or self.df.empty: return 1
+        try:
+            numeros = pd.to_numeric(self.df["Nro_Correlativo"], errors='coerce')
+            mx = numeros.max()
+            return 1 if pd.isna(mx) else int(mx) + 1
+        except: return 1
+
+    def existe_id(self, id_sys):
+        if self.df is None or self.df.empty: return False
+        return id_sys in self.df["ID_Sistema"].astype(str).values
+
+    def insertar(self, data):
+        if self.df is not None:
+            self.df = pd.concat([self.df, pd.DataFrame([data])], ignore_index=True)
+
+    def aprobar(self, id_sys, checker, fecha_rev, hora_rev, mes_rev, anio_rev):
+        if self.df is None: return False
+        idxs = self.df.index[self.df["ID_Sistema"] == id_sys].tolist()
+        if idxs:
+            idx = idxs[0]
+            self.df.at[idx, "Conformidad"] = "Completado"
+            self.df.at[idx, "Checker"] = checker
+            self.df.at[idx, "Fecha_Revision"] = fecha_rev
+            self.df.at[idx, "Hora_Revision"] = hora_rev
+            self.df.at[idx, "Mes_Revision"] = mes_rev
+            self.df.at[idx, "Anio_Revision"] = anio_rev
+            return True
+        return False
+
+# ==========================================
+# 6. ORQUESTADOR PRINCIPAL
+# ==========================================
+def main():
+    print("--- 🤖 ROBOT BITÁCORA (Con Mes/Año Automático) ---")
+    
+    outlook = HerramientasOutlook()
+    bitacora = GestorBitacora()
+    sql = GestorBackupSQL(CONFIG["RUTA_DB_SQLITE"])
+
+    if bitacora.df is None: return
+    cambios = 0
+
+    # --- FASE 1: PROCESAR SOLICITUDES ---
+    sol_folder = outlook.buscar_carpeta(CONFIG["FOLDER_SOLICITUDES"])
+    if sol_folder:
+        msgs = [m for m in sol_folder.Items if m.UnRead]
+        for m in msgs:
+            try:
+                id_sys = ProcesadorTexto.extraer_id(m.Subject)
+                if id_sys and not bitacora.existe_id(id_sys):
+                    print(f" [+] Nuevo Ticket: {id_sys}")
+                    
+                    d = ProcesadorTexto.parsear_cuerpo(m.Body)
+                    ruta_msg = outlook.guardar_msg(m, f"REQ_{id_sys}")
+                    correlativo = bitacora.obtener_correlativo()
+                    
+                    herramienta_code = d['Herramienta'].split(' ')[0] if d['Herramienta'] != "-" else "ND"
+                    cod_generado = f"{correlativo:03d}-{herramienta_code.upper()}"
+                    valor_estimacion = calcular_estimacion(d['Herramienta'])
+
+                    fila = {
+                        "Nro_Correlativo": correlativo,
+                        "Fecha": m.SentOn.strftime("%d/%m/%Y"),
+                        "Hora": m.SentOn.strftime("%H:%M"),
+                        "Codigo_Generado": cod_generado,
+                        "Maker": m.SenderName,
+                        "Solicitado_Por": d['Solicitado_Por'],
+                        "Herramienta": d['Herramienta'],
+                        "Accion": d['Accion'],
+                        "Institucion": d['Institucion'],
+                        "Codigo_Condicion": d['Codigo_Condicion'],
+                        "Nombre_Condicion": d['Nombre_Condicion'],
+                        "Estatus_Condicion": d['Estatus_Condicion'],
+                        "Tipo_Condicion": d['Tipo_Condicion'],
+                        "Consideraciones": d['Consideraciones'],
+                        "Objetivo": d['Objetivo'],
+                        "Estimacion": valor_estimacion,
+                        "Sustento": ruta_msg,
+                        "Checker": "",
+                        "Fecha_Revision": "",
+                        "Hora_Revision": "",
+                        "Mes_Revision": "", # Se llena al aprobar
+                        "Anio_Revision": "", # Se llena al aprobar
+                        "Enviado_Jefatura": "SI",
+                        "Conformidad": "Pendiente",
+                        "Canal": d['Canal'],
+                        "ID_Sistema": id_sys
+                    }
+
+                    bitacora.insertar(fila)
+                    sql.insertar_solicitud(fila)
+                    m.UnRead = False
+                    cambios += 1
+            except Exception as e: print(f"Error Solicitud: {e}")
+
+    # --- FASE 2: RESPUESTAS ---
+    resp_folder = outlook.buscar_carpeta(CONFIG["FOLDER_RESPUESTAS"])
+    if resp_folder:
+        msgs = [m for m in resp_folder.Items if m.UnRead]
+        for m in msgs:
+            try:
+                id_sys = ProcesadorTexto.extraer_id(m.Subject)
+                palabras_clave = ["OK", "CONFORME", "APROBADO", "APROBADA", "VOBO", "PROCEDER"]
+                
+                if id_sys and any(x in m.Body.upper() for x in palabras_clave):
+                    print(f" [OK] Aprobado: {id_sys}")
+                    outlook.guardar_msg(m, f"RESP_{id_sys}")
+                    
+                    # DATOS DE TIEMPO
+                    fecha_obj = m.ReceivedTime
+                    fecha_rev = fecha_obj.strftime("%d/%m/%Y")
+                    hora_rev = fecha_obj.strftime("%H:%M")
+                    
+                    # NUEVO: EXTRAER MES Y AÑO
+                    mes_rev = fecha_obj.strftime("%m") # Ej: "12"
+                    anio_rev = fecha_obj.strftime("%Y") # Ej: "2025"
+                    
+                    if bitacora.aprobar(id_sys, m.SenderName, fecha_rev, hora_rev, mes_rev, anio_rev):
+                        sql.actualizar_aprobacion(id_sys, m.SenderName, fecha_rev, hora_rev, mes_rev, anio_rev)
+                        m.UnRead = False
+                        cambios += 1
+            except: pass
+
+    if cambios > 0:
+        bitacora.guardar()
+        embellecer_excel(CONFIG["RUTA_EXCEL"])
+        print("\n✅ Bitácora Actualizada.")
+    else:
+        print("\n💤 Sin novedades.")
+
+if __name__ == "__main__":
+    main()
