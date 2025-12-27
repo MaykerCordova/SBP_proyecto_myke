@@ -1,0 +1,118 @@
+¡Claro que sí, Myke! Para una auditoría o para entregar el proyecto formalmente, necesitas un **Documento de Especificación Técnica y Funcional**.
+
+Este documento debe responder a tres preguntas que todo auditor hace:
+
+1. **¿Qué hace?** (Funcionalidad).
+2. **¿Cómo lo hace?** (Lógica y Código).
+3. **¿Es seguro y fiable?** (Integridad de datos).
+
+Aquí tienes el borrador completo y profesional. Puedes copiarlo y pegarlo en un Word.
+
+---
+
+# DOCUMENTACIÓN TÉCNICA Y FUNCIONAL
+
+## Proyecto: Automatización RPA de Bitácora de Reglas de Fraude
+
+**Autor:** Jose Mayker Cordova Pintado
+**Rol:** Analista de Prevención de Fraude / Data Scientist
+**Fecha:** 27 de Diciembre, 2025
+**Versión:** 1.0
+
+---
+
+### 1. RESUMEN EJECUTIVO
+
+El presente proyecto tiene como objetivo la automatización integral del registro, control y seguimiento de las reglas de fraude implementadas en las herramientas de monitoreo (Monitor Plus, Falcon, VRM, etc.).
+
+Se ha desarrollado un **Robot RPA (Robotic Process Automation)** basado en Python que intercepta las solicitudes vía correo electrónico, extrae la información crítica mediante procesamiento de lenguaje natural (Regex), calcula métricas de eficiencia operativa y asegura la persistencia de datos en un entorno dual (Excel + SQLite), alimentando finalmente un Dashboard de control en Power BI.
+
+### 2. ARQUITECTURA DE LA SOLUCIÓN
+
+El sistema opera bajo una arquitectura local híbrida que garantiza la operatividad incluso sin conexión a servidores centrales de base de datos.
+
+* **Entrada (Input):** Microsoft Outlook (Protocolo MAPI).
+* **Procesamiento (Core):** Python 3.13 (Librerías: `pywin32`, `pandas`, `sqlite3`, `re`).
+* **Almacenamiento (Storage):**
+* **Frontend:** Excel (`.xlsx`) para visualización de usuario final.
+* **Backend:** SQLite (`.db`) para integridad transaccional y conexión con BI.
+
+
+* **Salida (Output):** Power BI Desktop (Dashboard de KPIs).
+
+### 3. DICCIONARIO DE COMPONENTES (DOCUMENTACIÓN DE CÓDIGO)
+
+A continuación, se detalla la estructura modular del script `bitacora.py`.
+
+#### A. Módulo de Configuración (`CONFIG`)
+
+Diccionario estático que centraliza las rutas de acceso y parámetros del sistema.
+
+* **Objetivo:** Permitir la migración del robot a otros entornos sin modificar el código fuente.
+* **Variables Clave:** `RUTA_EXCEL`, `RUTA_DB`, `CARPETA_SOLICITUDES`.
+
+#### B. Clase `HerramientasOutlook` (Capa de Conexión)
+
+Encargada de la interacción con el cliente de correo.
+
+* **Función `buscar_carpeta()`:** Recorre recursivamente el árbol de carpetas de Outlook hasta encontrar la bandeja destino.
+* **Función `guardar_msg()`:** Descarga el correo físico (`.msg`) en una ruta de auditoría como evidencia inmutable de la solicitud.
+
+#### C. Clase `ProcesadorTexto` (Motor Lógico)
+
+Núcleo de inteligencia del robot. Utiliza Expresiones Regulares (Regex) para "leer" correos desestructurados.
+
+* **Patrones Regex:** Se definieron patrones flexibles (Insensitive Case) para capturar campos como `HERRAMIENTA:`, `ACCIÓN:`, y `CONDICIÓN:` ignorando espacios o errores menores de tipeo.
+* **Normalización:** Convierte fechas y textos a formatos estándar para evitar duplicidad.
+
+#### D. Clase `GestorBitacora` y `GestorBackupSQL` (Capa de Datos)
+
+Manejan la escritura en disco.
+
+* **Integridad Dual:** El sistema escribe primero en SQLite (transaccional) y luego en Excel. Si el Excel falla (por estar abierto), la base de datos SQLite asegura que el dato no se pierda.
+* **Manejo de Tipos:** Se fuerza el tipado `String` (Texto) en `Pandas` para evitar que códigos como "005" se conviertan en "5" o que fechas se corrompan.
+
+#### E. Lógica de Negocio (Main Loop)
+
+El orquestador principal ejecuta el siguiente flujo:
+
+1. **Lectura:** Escanea correos "No Leídos".
+2. **Generación de ID Único:** Crea un código compuesto (`Correlativo` + `Fecha` + `Herramienta` + `Condición`) para trazabilidad única.
+3. **Cálculo de Estimación:** Consulta la tabla maestra de tiempos (`MAPA_ESTIMACION`) para asignar automáticamente el ahorro de horas hombre.
+4. **Cierre:** Marca el correo como "Leído" solo si el guardado fue exitoso.
+
+### 4. FLUJO DEL PROCESO (BPMN)
+
+*(Aquí puedes referenciar la imagen del diagrama que generaste en Camunda).*
+
+1. **Solicitud:** El analista envía correo con plantilla estándar.
+2. **Extracción:** El robot detecta variables clave y asigna ID.
+3. **Registro Pendiente:** Se guarda la línea con estado "Pendiente".
+4. **Aprobación:** El gerente responde "OK/Conforme".
+5. **Cierre de Ciclo:** El robot actualiza el registro con fecha/hora de aprobación y cambia estado a "Completado".
+
+### 5. CONTROLES DE SEGURIDAD Y AUDITORÍA
+
+Para cumplir con los estándares de riesgo operacional:
+
+* **Evidencia Forense:** Cada registro en la bitácora está vinculado a un archivo `.msg` guardado en el servidor, permitiendo auditoría forense en caso de disputas.
+* **Base de Datos Blindada:** El uso de SQLite previene la corrupción de datos típica de archivos Excel compartidos y evita bloqueos de lectura/escritura (File Locking) cuando Power BI actualiza.
+* **Logs de Ejecución:** El sistema emite alertas en consola (Warnings) si detecta inconsistencias en tipos de datos, sin detener la operación crítica.
+
+### 6. ESCALABILIDAD FUTURA
+
+El sistema está diseñado para escalar hacia una orquestación BPMN formal.
+
+* **Fase Actual:** Lógica hardcodeada en Python (`MAPA_ESTIMACION`).
+* **Fase Futura:** Integración con **Camunda 7**, donde las reglas de estimación se gestionarán mediante tablas DMN visuales, permitiendo ajustes por parte del negocio sin intervención de TI.
+
+---
+
+### 💡 Recomendación Final para tu Word
+
+1. Copia este texto en un Word.
+2. Ponle el logo de tu banco en la esquina superior.
+3. Agrega las **capturas del diagrama de Camunda** en la sección 4.
+4. Agrega una captura pequeña del código (donde se ve la clase `GestorBitacora`) en la sección 3.
+
+¡Con esto tienes un entregable de nivel Senior, Myke! ¿Te parece bien la estructura?
