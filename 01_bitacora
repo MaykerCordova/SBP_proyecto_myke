@@ -402,3 +402,91 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+### corrección :
+class GestorBitacora:
+    def __init__(self):
+        self.ruta = CONFIG["RUTA_EXCEL"]
+        # LISTA DE COLUMNAS ACTUALIZADA
+        self.columnas = [
+            "Nro_Correlativo",      # 1
+            "Fecha",                # 2
+            "Hora",                 # 3
+            "Codigo_Generado",      # 4
+            "Maker",                # 5
+            "Solicitado_Por",       # 6
+            "Herramienta",          # 7
+            "Accion",               # 8
+            "Institucion",          # 9
+            "Codigo_Condicion",     # 10
+            "Nombre_Condicion",     # 11
+            "Estatus_Condicion",    # 12
+            "Tipo_Condicion",       # 13
+            "Consideraciones",      # 14
+            "Objetivo",             # 15
+            "Estimacion",           # 16
+            "Sustento",             # 17
+            "Checker",              # 18
+            "Fecha_Revision",       # 19
+            "Hora_Revision",        # 20
+            "Mes_Revision",         # 21
+            "Anio_Revision",        # 22
+            "Enviado_Jefatura",     # 23
+            "Conformidad",          # 24
+            "Canal",                # 25
+            "ID_Sistema"            # 26
+        ]
+        self.cargar_excel()
+
+    def cargar_excel(self):
+        os.makedirs(os.path.dirname(self.ruta), exist_ok=True)
+        if os.path.exists(self.ruta):
+            try: 
+                # CORRECCIÓN AQUÍ: Forzamos dtype=str para evitar el error de float64
+                self.df = pd.read_excel(self.ruta, dtype=str)
+                # Reemplazamos los "nan" (vacíos) por texto vacío real
+                self.df.fillna("", inplace=True)
+            except: self.df = None; print("⛔ CIERRA EL EXCEL PRIMERO.")
+        else:
+            # CORRECCIÓN AQUÍ: Creamos el DataFrame forzando tipo Object (Texto)
+            self.df = pd.DataFrame(columns=self.columnas).astype(object)
+
+    def guardar(self):
+        if self.df is not None:
+            try: self.df.to_excel(self.ruta, index=False)
+            except: print("❌ Error guardando Excel.")
+
+    def obtener_correlativo(self):
+        if self.df is None or self.df.empty: return 1
+        try:
+            # Convertimos temporalmente a número solo para calcular el máximo
+            numeros = pd.to_numeric(self.df["Nro_Correlativo"], errors='coerce')
+            mx = numeros.max()
+            return 1 if pd.isna(mx) else int(mx) + 1
+        except: return 1
+
+    def existe_id(self, id_sys):
+        if self.df is None or self.df.empty: return False
+        return id_sys in self.df["ID_Sistema"].astype(str).values
+
+    def insertar(self, data):
+        if self.df is not None:
+            # Convertimos la nueva fila a DataFrame de objetos antes de concatenar
+            nuevo_df = pd.DataFrame([data]).astype(object)
+            self.df = pd.concat([self.df, nuevo_df], ignore_index=True)
+
+    def aprobar(self, id_sys, checker, fecha_rev, hora_rev, mes_rev, anio_rev):
+        if self.df is None: return False
+        idxs = self.df.index[self.df["ID_Sistema"] == id_sys].tolist()
+        if idxs:
+            idx = idxs[0]
+            # Como ya forzamos que todo sea texto/objeto, esto ya no dará Warning
+            self.df.at[idx, "Conformidad"] = "Completado"
+            self.df.at[idx, "Checker"] = str(checker)
+            self.df.at[idx, "Fecha_Revision"] = str(fecha_rev)
+            self.df.at[idx, "Hora_Revision"] = str(hora_rev)
+            self.df.at[idx, "Mes_Revision"] = str(mes_rev)
+            self.df.at[idx, "Anio_Revision"] = str(anio_rev)
+            return True
+        return False
