@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Camunda Modeler" exporterVersion="5.0.0" modeler:executionPlatform="Camunda Platform" modeler:executionPlatformVersion="7.17.0">
+  <bpmn:process id="Proceso_Robot_Bitacora_Jumbo" name="Robot Bitácora Fraude V3 (Jumbo)" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1" name="Recepción de Correo (Outlook)">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="MessageEventDefinition_1" />
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="Activity_Python_Main" name="Ejecutar Script Python (Orquestador)">
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_Tipo" name="¿Tipo de Correo?">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_Solicitud</bpmn:outgoing>
+      <bpmn:outgoing>Flow_Respuesta</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="Activity_ProcesarSolicitud" name="Extraer Datos, Generar ID y Calcular Estimación">
+      <bpmn:incoming>Flow_Solicitud</bpmn:incoming>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Activity_GuardarPendiente" name="Guardar en BD y Excel (Estado: Pendiente)">
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+      <bpmn:outgoing>Flow_5</bpmn:outgoing>
+      <bpmn:dataOutputAssociation id="DataOutputAssociation_1">
+        <bpmn:targetRef>DataStoreReference_SQL</bpmn:targetRef>
+      </bpmn:dataOutputAssociation>
+      <bpmn:dataOutputAssociation id="DataOutputAssociation_2">
+        <bpmn:targetRef>DataObjectReference_Excel</bpmn:targetRef>
+      </bpmn:dataOutputAssociation>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="Event_FinSolicitud" name="Solicitud Procesada">
+      <bpmn:incoming>Flow_5</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:serviceTask id="Activity_ProcesarRespuesta" name="Validar Aprobación y Capturar Timestamps">
+      <bpmn:incoming>Flow_Respuesta</bpmn:incoming>
+      <bpmn:outgoing>Flow_7</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Activity_ActualizarCompletado" name="Actualizar BD y Excel (Estado: Completado)">
+      <bpmn:incoming>Flow_7</bpmn:incoming>
+      <bpmn:outgoing>Flow_8</bpmn:outgoing>
+      <bpmn:dataOutputAssociation id="DataOutputAssociation_3">
+        <bpmn:targetRef>DataStoreReference_SQL</bpmn:targetRef>
+      </bpmn:dataOutputAssociation>
+      <bpmn:dataOutputAssociation id="DataOutputAssociation_4">
+        <bpmn:targetRef>DataObjectReference_Excel</bpmn:targetRef>
+      </bpmn:dataOutputAssociation>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="Event_FinRespuesta" name="Aprobación Registrada">
+      <bpmn:incoming>Flow_8</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:dataStoreReference id="DataStoreReference_SQL" name="SQLite Blindado (Backend)" />
+    <bpmn:dataObjectReference id="DataObjectReference_Excel" name="Bitácora Excel (Frontend)" dataObjectRef="DataObject_1" />
+    <bpmn:dataObject id="DataObject_1" />
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Activity_Python_Main" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Activity_Python_Main" targetRef="Gateway_Tipo" />
+    <bpmn:sequenceFlow id="Flow_Solicitud" name="Nueva Solicitud" sourceRef="Gateway_Tipo" targetRef="Activity_ProcesarSolicitud" />
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Activity_ProcesarSolicitud" targetRef="Activity_GuardarPendiente" />
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Activity_GuardarPendiente" targetRef="Event_FinSolicitud" />
+    <bpmn:sequenceFlow id="Flow_Respuesta" name="Respuesta de Aprobación" sourceRef="Gateway_Tipo" targetRef="Activity_ProcesarRespuesta" />
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="Activity_ProcesarRespuesta" targetRef="Activity_ActualizarCompletado" />
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="Activity_ActualizarCompletado" targetRef="Event_FinRespuesta" />
+    <bpmn:textAnnotation id="TextAnnotation_PBI">
+      <bpmn:text>Power BI lee directamente desde aquí</bpmn:text>
+    </bpmn:textAnnotation>
+    <bpmn:association id="Association_PBI" sourceRef="DataStoreReference_SQL" targetRef="TextAnnotation_PBI" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Proceso_Robot_Bitacora_Jumbo">
+      <bpmndi:BPMNEdge id="Association_PBI_di" bpmnElement="Association_PBI">
+        <di:waypoint x="985" y="290" />
+        <di:waypoint x="920" y="290" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="DataOutputAssociation_4_di" bpmnElement="DataOutputAssociation_4">
+        <di:waypoint x="1060" y="380" />
+        <di:waypoint x="1102" y="325" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="DataOutputAssociation_3_di" bpmnElement="DataOutputAssociation_3">
+        <di:waypoint x="1030" y="380" />
+        <di:waypoint x="1030" y="325" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="DataOutputAssociation_2_di" bpmnElement="DataOutputAssociation_2">
+        <di:waypoint x="1060" y="210" />
+        <di:waypoint x="1102" y="275" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="DataOutputAssociation_1_di" bpmnElement="DataOutputAssociation_1">
+        <di:waypoint x="1030" y="210" />
+        <di:waypoint x="1030" y="275" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_8_di" bpmnElement="Flow_8">
+        <di:waypoint x="1110" y="420" />
+        <di:waypoint x="1202" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_7_di" bpmnElement="Flow_7">
+        <di:waypoint x="850" y="420" />
+        <di:waypoint x="960" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_Respuesta_di" bpmnElement="Flow_Respuesta">
+        <di:waypoint x="550" y="295" />
+        <di:waypoint x="550" y="420" />
+        <di:waypoint x="700" y="420" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="566" y="386" width="68" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5">
+        <di:waypoint x="1110" y="170" />
+        <di:waypoint x="1202" y="170" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="850" y="170" />
+        <di:waypoint x="960" y="170" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_Solicitud_di" bpmnElement="Flow_Solicitud">
+        <di:waypoint x="550" y="245" />
+        <di:waypoint x="550" y="170" />
+        <di:waypoint x="700" y="170" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="561" y="183" width="77" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="450" y="270" />
+        <di:waypoint x="525" y="270" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="228" y="270" />
+        <di:waypoint x="300" y="270" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
+        <dc:Bounds x="192" y="252" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="176" y="295" width="69" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_Python_Main_di" bpmnElement="Activity_Python_Main">
+        <dc:Bounds x="300" y="230" width="150" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Tipo_di" bpmnElement="Gateway_Tipo" isMarkerVisible="true">
+        <dc:Bounds x="525" y="245" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="585" y="263" width="87" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_ProcesarSolicitud_di" bpmnElement="Activity_ProcesarSolicitud">
+        <dc:Bounds x="700" y="130" width="150" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_GuardarPendiente_di" bpmnElement="Activity_GuardarPendiente">
+        <dc:Bounds x="960" y="130" width="150" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Event_FinSolicitud_di" bpmnElement="Event_FinSolicitud">
+        <dc:Bounds x="1202" y="152" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1194" y="195" width="53" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_ProcesarRespuesta_di" bpmnElement="Activity_ProcesarRespuesta">
+        <dc:Bounds x="700" y="380" width="150" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_ActualizarCompletado_di" bpmnElement="Activity_ActualizarCompletado">
+        <dc:Bounds x="960" y="380" width="150" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Event_FinRespuesta_di" bpmnElement="Event_FinRespuesta">
+        <dc:Bounds x="1202" y="402" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1192" y="445" width="57" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="DataStoreReference_SQL_di" bpmnElement="DataStoreReference_SQL">
+        <dc:Bounds x="1005" y="275" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="991" y="332" width="79" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="DataObjectReference_Excel_di" bpmnElement="DataObjectReference_Excel">
+        <dc:Bounds x="1102" y="275" width="36" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1085" y="332" width="71" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="TextAnnotation_PBI_di" bpmnElement="TextAnnotation_PBI">
+        <dc:Bounds x="820" y="262" width="100" height="55" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
