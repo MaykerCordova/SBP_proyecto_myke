@@ -1,0 +1,54 @@
+# --- 1. SELECCIÓN DE COLUMNAS ACTUALIZADA ---
+columnas_finales = [
+    'Fecha', 'MONTO USD', 'TIPO DE MONEDA',
+    'NOMBRE REGLA', 'CODIGO REGLA',
+    'CALIFICACION', 'Gestion', # <--- Ahora sabemos que esto es el ESTADO
+    'BIN', 'MCC', 'NOMBRE DE COMERCIO',
+    'CODIGO PAIS', 'LOCALIDAD',
+    'ENTRY MODE', 'ECI', 'Entidad',
+    'COD REDP 59', 'TIPO DE TOKEN', 'NUMERO DE TOKEN' # <--- Agregadas por tu solicitud
+]
+
+# Creamos el DF limpio
+df_clean = df[columnas_finales].copy()
+
+# --- 2. LIMPIEZA Y FORMATO ---
+# Convertir Fecha
+df_clean['Fecha'] = pd.to_datetime(df_clean['Fecha'], errors='coerce')
+
+# --- 3. INGENIERÍA DE VARIABLES (Nivel Senior) ---
+
+# A. Clasificación de Eficiencia (Basado en tu columna CALIFICACION)
+# Esto te permitirá contar rápido en Power BI
+def clasificar_estado(estado):
+    estado = str(estado).upper().strip()
+    if 'FRAUDE' in estado: return 'Fraude Confirmado'
+    elif 'BUENA' in estado: return 'Falso Positivo' # Regla saltó, pero cliente era bueno
+    elif 'PENDIENTE' in estado: return 'En Investigación'
+    elif 'NUEVA' in estado: return 'Sin Gestionar'
+    else: return 'Otros'
+
+df_clean['Estado_Analisis'] = df_clean['CALIFICACION'].apply(clasificar_estado)
+
+# B. Flags Numéricos (Para hacer sumas rápidas en Power BI)
+# Truco: Crear columnas de 1 y 0 facilita calcular tasas % luego.
+df_clean['Es_Fraude'] = df_clean['Estado_Analisis'].apply(lambda x: 1 if x == 'Fraude Confirmado' else 0)
+df_clean['Es_FalsoPositivo'] = df_clean['Estado_Analisis'].apply(lambda x: 1 if x == 'Falso Positivo' else 0)
+
+# C. Rango de Hora (Mantiene la lógica anterior)
+def categorizar_hora(fecha):
+    if pd.isnull(fecha): return 'Desconocido'
+    h = fecha.hour
+    if 0 <= h < 6: return 'Madrugada (0-6)'
+    elif 6 <= h < 12: return 'Mañana (6-12)'
+    elif 12 <= h < 18: return 'Tarde (12-18)'
+    else: return 'Noche (18-24)'
+
+df_clean['Franja_Horaria'] = df_clean['Fecha'].apply(categorizar_hora)
+
+# D. Flag Internacional
+df_clean['Es_Internacional'] = df_clean['CODIGO PAIS'].apply(lambda x: 'NO' if str(x).strip() in ['PE', 'PER', '604'] else 'SI')
+
+# --- 4. GUARDADO ---
+print("Generando Data_VRM_Final.parquet...")
+df_clean.to_parquet("Data_VRM_Final.parquet", index=False)
