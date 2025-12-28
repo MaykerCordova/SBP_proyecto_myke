@@ -52,3 +52,95 @@ df_clean['Es_Internacional'] = df_clean['CODIGO PAIS'].apply(lambda x: 'NO' if s
 # --- 4. GUARDADO ---
 print("Generando Data_VRM_Final.parquet...")
 df_clean.to_parquet("Data_VRM_Final.parquet", index=False)
+
+
+#### VERSION 2
+import pandas as pd
+import pyodbc
+import numpy as np
+
+# =============================================================================
+# 1. CONFIGURACIÓN Y CONEXIÓN
+# =============================================================================
+ruta_db = r'C:\Users\TuUsuario\Documents\Analisis_VRM.accdb' # <--- Actualiza tu ruta
+nombre_tabla = 'NombreDeTuTabla'                              # <--- Actualiza tu tabla
+ruta_salida_parquet = r'C:\Users\TuUsuario\Documents\Data_VRM_Clean.parquet'
+
+print("🔄 Conectando a Access...")
+try:
+    conn_str = (r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=' + ruta_db + ';')
+    conn = pyodbc.connect(conn_str)
+    query = f"SELECT * FROM {nombre_tabla}"
+    df = pd.read_sql(query, conn)
+    conn.close()
+    print(f"✅ Datos cargados: {len(df)} filas.")
+except Exception as e:
+    print(f"❌ Error crítico de conexión: {e}")
+    exit()
+
+# =============================================================================
+# 2. LIMPIEZA Y NORMALIZACIÓN (El arreglo del problema de texto)
+# =============================================================================
+# Asumimos que la columna se llama 'Calificación'. Cámbialo si es distinto.
+col_status = 'Calificación' 
+
+# A. Limpieza de texto (Mayúsculas y sin espacios)
+# Si hay nulos, los rellenamos con 'DESCONOCIDO' para que no falle el código
+df[col_status] = df[col_status].fillna('DESCONOCIDO').astype(str)
+df['Status_Clean'] = df[col_status].str.upper().str.strip()
+
+# =============================================================================
+# 3. CREACIÓN DE COLUMNAS PARA POWER BI (Ingeniería de datos)
+# =============================================================================
+# Aquí preparamos el terreno para que tus medidas DAX sean fáciles.
+
+# DEFINICIÓN DE CATEGORÍAS
+# Ajusta estas listas si tus nombres en Access son ligeramente diferentes
+estados_fraude = ['PRIVADA']
+estados_fp = ['BUENA']     # Falso Positivo
+estados_pend = ['PENDIENTE']
+estados_nuevos = ['NUEVA']
+
+# A. Columna: Clasificación Simple (Para Filtros Visuales)
+conditions = [
+    df['Status_Clean'].isin(estados_fraude),
+    df['Status_Clean'].isin(estados_fp),
+    df['Status_Clean'].isin(estados_pend),
+    df['Status_Clean'].isin(estados_nuevos)
+]
+choices = ['Fraude', 'Falso Positivo', 'Pendiente', 'Nuevo']
+
+# Si no cae en ninguno, ponemos 'Otro'
+df['Categoria_Final'] = np.select(conditions, choices, default='Otro')
+
+# B. Columna: Grupo de Análisis (La solución a tu problema de Ratios)
+# Esto permite filtrar en Power BI: ¿Quiero ver Precisión o Carga Laboral?
+conditions_grupo = [
+    df['Status_Clean'].isin(estados_fraude + estados_fp), # Casos Cerrados
+    df['Status_Clean'].isin(estados_pend + estados_nuevos) # Casos Abiertos
+]
+choices_grupo = ['Cerrado (Precision)', 'Abierto (Backlog)']
+df['Grupo_Status'] = np.select(conditions_grupo, choices_grupo, default='Ignorar')
+
+# C. Columna Bandera Numérica (Para facilitar sumas en DAX)
+# 1 si es fraude, 0 si no.
+df['Flag_Fraude'] = np.where(df['Status_Clean'].isin(estados_fraude), 1, 0)
+# 1 si es caso cerrado, 0 si no (Será tu denominador en DAX)
+df['Flag_Cerrado'] = np.where(df['Status_Clean'].isin(estados_fraude + estados_fp), 1, 0)
+
+# =============================================================================
+# 4. EXPORTACIÓN A PARQUET
+# =============================================================================
+print("💾 Guardando archivo Parquet...")
+
+# Convertimos columnas de fecha a datetime si existen (Opcional, pero recomendado)
+# if 'Fecha' in df.columns:
+#     df['Fecha'] = pd.to_datetime(df['Fecha'])
+
+# Guardamos
+try:
+    df.to_parquet(ruta_salida_parquet, index=False)
+    print(f"✅ Archivo exportado exitosamente en: {ruta_salida_parquet}")
+    print("🚀 Listo para importar en Power BI.")
+except Exception as e:
+    print(f"❌ Error al guardar Parquet (Verificar librería pyarrow/fastparquet): {e}")
