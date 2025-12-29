@@ -144,3 +144,46 @@ try:
     print("🚀 Listo para importar en Power BI.")
 except Exception as e:
     print(f"❌ Error al guardar Parquet (Verificar librería pyarrow/fastparquet): {e}")
+
+
+### CALENDARIO VRM
+Calendario = 
+ADDCOLUMNS (
+    // 1. Detecta automáticamente la primera y última fecha de tu data
+    CALENDARAUTO(), 
+    
+    // --- COLUMNAS ESTÁNDAR ---
+    "Año", YEAR([Date]),
+    "Mes Nro", MONTH([Date]),
+    "Mes Nombre", FORMAT([Date], "MMMM"),
+    
+    // Lo que pediste: Abreviatura en Mayúsculas (ENE, FEB, MAR)
+    "Mes Corto", UPPER(FORMAT([Date], "MMM")), 
+    
+    // Para ordenar gráficos cronológicamente (202501, 202502)
+    "Periodo Sort", FORMAT([Date], "YYYYMM"),
+    
+    "Día Semana Nro", WEEKDAY([Date], 2), // 1=Lunes, 7=Domingo
+    "Día Semana", FORMAT([Date], "dddd"),
+    "Día Corto", UPPER(FORMAT([Date], "ddd")), // LUN, MAR, MIE
+    
+    // --- COLUMNAS FISCALES (Estilo Scotiabank / Canadá Bancario) ---
+    // El año fiscal suele empezar el 1 de Noviembre.
+    // Si estamos en Nov(11) o Dic(12), pertenece al año siguiente.
+    "Año Fiscal", 
+        IF(
+            MONTH([Date]) >= 11, 
+            YEAR([Date]) + 1, 
+            YEAR([Date])
+        ),
+    
+    // Trimestre Fiscal (Q1 arranca en Noviembre)
+    "Q Fiscal", 
+        "Q" & SWITCH(
+            TRUE(),
+            MONTH([Date]) IN {11, 12, 1}, 1,
+            MONTH([Date]) IN {2, 3, 4}, 2,
+            MONTH([Date]) IN {5, 6, 7}, 3,
+            4 // Meses 8, 9, 10
+        )
+)
