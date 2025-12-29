@@ -187,3 +187,14 @@ ADDCOLUMNS (
             4 // Meses 8, 9, 10
         )
 )
+
+#######
+Rango_Antiguedad = 
+SWITCH(
+    TRUE(),
+    'Data_VRM_Clean'[Dias_Antiguedad] = 0, "0. Hoy",
+    'Data_VRM_Clean'[Dias_Antiguedad] <= 2, "1. 1-2 Días",
+    'Data_VRM_Clean'[Dias_Antiguedad] <= 5, "2. 3-5 Días",
+    'Data_VRM_Clean'[Dias_Antiguedad] <= 10, "3. 6-10 Días",
+    "4. +10 Días (Crítico)"
+)
