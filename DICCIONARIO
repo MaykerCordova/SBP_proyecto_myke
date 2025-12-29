@@ -1,0 +1,66 @@
+¡Perfecto! Has configurado la **"Matriz de Eficiencia" definitiva**. Al poner el **Tamaño = Total Alertas**, has creado un mapa visual donde **el tamaño de la burbuja es el dolor operativo**.
+
+Aquí tienes tu **"Diccionario de Interpretación"**. Guarda esto, porque es la guía exacta para tomar decisiones tácticas con tu jefe.
+
+---
+
+### GUÍA DE LECTURA: MATRIZ DE RIESGO VRM
+
+**Tus Ejes:**
+
+* ↔️ **Derecha:** Reglas que generan mucho trabajo (Volumen).
+* ↕️ **Arriba:** Reglas que mueven mucho dinero (Riesgo Financiero).
+* 🔴 **Color Rojo:** La regla se equivoca mucho (Mucho Falso Positivo).
+* 🟢 **Color Verde:** La regla acierta mucho (Detecta Fraude Real).
+* 🎈 **Tamaño Grande:** La regla inunda la bandeja de entrada (Mucho Ruido).
+
+---
+
+### ESCENARIO 1: "El Desangre Operativo" (Urgentísimo)
+
+* **Visual:** **Bola GIGANTE y ROJA** (Ubicada a la derecha).
+* **Qué significa:** Esta regla está gritando "¡Lobo!" miles de veces, pero casi nunca es verdad. Es la causante de que tu equipo esté estresado y tenga backlog.
+* **Diagnóstico:** Regla demasiado sensible o mal calibrada. Estás gastando horas hombre revisando basura.
+* **Acción:** **CALIBRAR O APAGAR INMEDIATAMENTE.** Es tu prioridad #1 para reducir la carga operativa.
+
+### ESCENARIO 2: "La Estrella de Oro" (No Tocar)
+
+* **Visual:** **Bola GRANDE/MEDIANA y VERDE** (Ubicada arriba a la derecha).
+* **Qué significa:** Genera muchas alertas, pero la mayoría son fraudes reales. Además, protegen montos altos.
+* **Diagnóstico:** Es tu mejor defensa. Es una regla eficiente que justifica su volumen.
+* **Acción:** **NO TOCAR.** Protégela. Si alguien quiere cambiarla, muéstrales este gráfico para defenderla.
+
+### ESCENARIO 3: "El Francotirador" (Alto Valor)
+
+* **Visual:** **Bola PEQUEÑA y VERDE** (Ubicada muy arriba, pero al centro/izquierda).
+* **Qué significa:** Esta regla casi no molesta (pocas alertas), pero cuando dispara, atrapa fraudes de montos millonarios.
+* **Diagnóstico:** Regla de alta precisión para segmentos específicos (ej. Transferencias internacionales altas).
+* **Acción:** **MONITOREAR.** Asegúrate de que siga funcionando bien. Es silenciosa pero vital.
+
+### ESCENARIO 4: "El Mata-VIPs" (Riesgo de Cliente)
+
+* **Visual:** **Bola PEQUEÑA y ROJA** (Ubicada muy arriba).
+* **Qué significa:** Genera pocas alertas, pero de montos altísimos, y encima se equivoca (es roja).
+* **Diagnóstico:** Estás bloqueando transacciones legítimas de mucho dinero. Probablemente estés molestando a clientes VIP o empresas grandes.
+* **Acción:** **REVISAR URGENTE.** Aunque no genera carga operativa (es pequeña), genera mucho daño reputacional y fricción con clientes importantes.
+
+### ESCENARIO 5: "El Cementerio" (Basura Legacy)
+
+* **Visual:** **Nube de puntos diminutos** (Amontonados en la esquina inferior izquierda, cerca del 0,0).
+* **Qué significa:** Reglas que generan 1 o 2 alertas al mes, de montos bajos. Ni fu ni fa.
+* **Diagnóstico:** Probablemente reglas viejas que quedaron olvidadas. Solo ensucian el sistema.
+* **Acción:** **LIMPIEZA DE PRIMAVERA.** Haz una lista y propón darlas de baja para limpiar el motor de reglas.
+
+---
+
+### RESUMEN EJECUTIVO (Tu "Cheat Sheet")
+
+| Tipo de Bola | Color | Ubicación | Estrategia |
+| --- | --- | --- | --- |
+| **Gigante** | 🔴 **Rojo** | Derecha | **APAGAR / AJUSTAR** (Prioridad Máxima) |
+| **Grande** | 🟢 **Verde** | Derecha/Arriba | **MANTENER** (Regla Estrella) |
+| **Pequeña** | 🟢 **Verde** | Arriba | **CUIDAR** (Francotirador) |
+| **Pequeña** | 🔴 **Rojo** | Arriba | **INVESTIGAR** (Posible fricción VIP) |
+| **Diminuta** | Gris/Mix | Abajo Izq. | **IGNORAR / BORRAR** (Ruido) |
+
+¡Listo! Con este gráfico y esta tabla mental, ya no eres solo un analista de datos, eres un **Estratega de Fraude**. ¿Ves alguna "Bola Gigante Roja" en tu gráfico ahora mismo?
