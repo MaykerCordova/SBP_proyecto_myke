@@ -1,238 +1,29 @@
-# paquetes
-# pip install streamlit polars plotly scikit-learn pandas pyarrow
-import streamlit as st
 import polars as pl
-import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import OrdinalEncoder
-from datetime import datetime, timedelta
 
-# --- CONFIGURACIÓN INICIAL ---
-st.set_page_config(page_title="🛡️ Monitor+ Fraud Hunter", layout="wide", initial_sidebar_state="expanded")
+# Cargar Data
+# Asegurate de que header=4 si las primeras lineas son basura
+df = pl.read_excel("TU_ARCHIVO_MONITOR.xlsx", sheet_id=1, read_csv_options={"has_header": False, "skip_rows": 4})
 
-st.markdown("""
-<style>
-    .metric-card {background-color: #f0f2f6; padding: 20px; border-radius: 10px;}
-    h1 {color: #2c3e50;}
-</style>
-""", unsafe_allow_html=True)
+# 1. Verificación de Nombres de Columnas
+print("Columnas encontradas:", df.columns)
 
-st.title("🛡️ Sistema de Detección Avanzada de Fraude (ACF/Monitor+)")
-st.markdown("**Analítica:** Polars + Markov Chains + ML (Isolation Forest) | **Autor:** Jose 'Myke' Cordova")
+# 2. Análisis de Entry Mode (¿Tengo ataques de banda?)
+print("\n--- Distribución de Entry Mode ---")
+print(df["ACF-ENTRY MODE"].value_counts())
 
-# --- 1. FUNCIÓN DE CARGA Y LIMPIEZA DE DATOS ---
-@st.cache_data
-def load_and_process_data(uploaded_file=None):
-    if uploaded_file is not None:
-        # --- MODO PRODUCCIÓN: CARGA DE TU CSV ACF ---
-        try:
-            df = pl.read_csv(uploaded_file, ignore_errors=True, infer_schema_length=10000)
-            
-            # 1.1 RENOMBRADO (DICCIONARIO ACF -> SISTEMA)
-            # Ajusta los nombres de la IZQUIERDA según tu archivo real del banco
-            column_mapping = {
-                "ACF_PAN": "pan_mascara",       
-                "ACF_IMPORTE": "monto",
-                "ACF_F_TRX": "fecha_hora",
-                "ACF_NOM_COM": "comercio_sucio",
-                "ACF_COD_RPTA": "resp_code",
-                "ACF_MODO_ENT": "entry_mode",
-                "ACF_MCC": "mcc"
-            }
-            
-            # Filtramos solo columnas que existan para evitar errores si falta alguna
-            existing_cols = [c for c in column_mapping.keys() if c in df.columns]
-            df = df.select(existing_cols).rename({k:v for k,v in column_mapping.items() if k in existing_cols})
-            
-            # 1.2 CASTING DE TIPOS
-            df = df.with_columns([
-                pl.col("monto").cast(pl.Float64),
-                # Ajusta el formato de fecha si tu CSV es diferente (ej: "%d/%m/%Y %H:%M:%S")
-                pl.col("fecha_hora").str.to_datetime(strict=False).alias("fecha_hora") 
-            ]).drop_nulls()
-            
-        except Exception as e:
-            st.error(f"Error al leer el archivo: {e}")
-            return None
-    else:
-        # --- MODO SIMULACIÓN (PARA PRUEBAS) ---
-        np.random.seed(42)
-        n_rows = 5000
-        card_ids = [f"4550-XXXX-{np.random.randint(1000,9999)}" for _ in range(200)]
-        merchants_raw = ['UBER *TRIP LIMA', 'NETFLIX.COM', 'SAGA FALABELLA S.A.', 'BODEGA PEPITO 123', 'NIUBIZ* RESTAURANTE']
-        
-        data = {
-            "fecha_hora": [datetime.now() - timedelta(minutes=np.random.randint(0, 10000)) for _ in range(n_rows)],
-            "pan_mascara": np.random.choice(card_ids, n_rows),
-            "monto": np.random.exponential(scale=250, size=n_rows),
-            "comercio_sucio": np.random.choice(merchants_raw, n_rows),
-            "entry_mode": np.random.choice(['051', '901', '010', '071'], n_rows, p=[0.5, 0.05, 0.3, 0.15]), # 901 es banda
-            "resp_code": np.random.choice(['00', '51', 'N7', '05'], n_rows, p=[0.85, 0.05, 0.05, 0.05]),
-            "mcc": np.random.choice(['5411', '5812', '5732'], n_rows)
-        }
-        df = pl.DataFrame(data).sort("fecha_hora")
+# 3. Análisis de Códigos de Respuesta
+print("\n--- Top Errores (Posible Fraude) ---")
+print(df["ACF-COD RPTA"].value_counts().head(10))
 
-    # --- 2. LIMPIEZA Y FEATURE ENGINEERING (COMÚN PARA AMBOS) ---
-    
-    # 2.1 Limpieza de Nombres de Comercio (Regex)
-    df = df.with_columns(
-        pl.col("comercio_sucio")
-        .str.to_uppercase()
-        .str.replace(r"^(IZIPAY|NIUBIZ|CULQI)\s*", "") 
-        .str.replace(r"[\*#].*$", "") 
-        .str.strip_chars()
-        .alias("comercio")
-    )
-    
-    # 2.2 Agrupación de Códigos de Respuesta (Para Markov)
-    df = df.with_columns(
-        pl.when(pl.col("resp_code") == "00").then(pl.lit("APROBADO"))
-        .when(pl.col("resp_code").is_in(["51", "61", "65"])).then(pl.lit("NO_FONDOS"))
-        .when(pl.col("resp_code").is_in(["54", "N7", "55", "75"])).then(pl.lit("DATOS_MALOS")) # Fraude potencial
-        .otherwise(pl.lit("OTRO_ERROR"))
-        .alias("grupo_respuesta")
-    )
-
-    # 2.3 Construcción de Historia (Markov Features)
-    df = df.sort(["pan_mascara", "fecha_hora"]).with_columns([
-        pl.col("grupo_respuesta").shift(1).over("pan_mascara").fill_null("START").alias("prev_resp"),
-        (pl.col("fecha_hora").diff().dt.total_minutes().over("pan_mascara")).fill_null(999).alias("min_desde_ultima")
+# 4. Correlación entre Score de Monitor y Monto
+# (Requiere limpieza previa si vienen como texto)
+try:
+    df_clean = df.with_columns([
+        pl.col("ACF-MONTO ORIGINAL TRX").cast(pl.Float64),
+        pl.col("SCORE DINAMICO").cast(pl.Float64)
     ])
-    
-    # Crear la transición de estado (Ej: NO_FONDOS -> APROBADO)
-    df = df.with_columns(
-        (pl.col("prev_resp") + " -> " + pl.col("grupo_respuesta")).alias("transicion_markov")
-    )
-    
-    return df
-
-# --- SIDEBAR ---
-st.sidebar.header("📂 Panel de Control")
-uploaded_file = st.sidebar.file_uploader("Cargar Journal ACF (CSV)", type=["csv"])
-df = load_and_process_data(uploaded_file)
-
-if df is not None:
-    # --- 3. MOTORES DE ANÁLISIS ---
-
-    # A. MOTOR DE PROBABILIDAD (MARKOV)
-    # Calculamos qué tan rara es cada transición en todo el banco
-    trans_counts = df.group_by("transicion_markov").count()
-    total_trans = trans_counts["count"].sum()
-    trans_probs = trans_counts.with_columns(
-        (pl.col("count") / total_trans).alias("prob_transicion")
-    )
-    df_scored = df.join(trans_probs, on="transicion_markov", how="left")
-
-    # B. MOTOR DE MACHINE LEARNING (ISOLATION FOREST)
-    # Preparamos datos: Convertimos texto a números para el modelo
-    encoder = OrdinalEncoder()
-    # Usamos Entry Mode (Banda vs Chip) y MCC como variables categóricas clave
-    X_cat = df_scored.select(["entry_mode", "mcc", "grupo_respuesta"]).to_pandas()
-    X_encoded = encoder.fit_transform(X_cat)
-    
-    X_num = df_scored.select(["monto", "min_desde_ultima"]).to_pandas().fillna(0)
-    X_final = np.hstack([X_num, X_encoded])
-
-    # Entrenamos el detector de anomalías
-    model_if = IsolationForest(contamination=0.03, random_state=42)
-    df_scored = df_scored.with_columns(
-        pl.Series(model_if.fit_predict(X_final)).alias("is_anomaly") # -1 = Anomalía
-    )
-
-    # C. CÁLCULO DE SCORE HÍBRIDO (0 a 100)
-    # Mezcla de probabilidad estocástica + ML + Reglas de negocio
-    df_scored = df_scored.with_columns(
-        (
-            (1 - pl.col("prob_transicion")) * 40 +  # Si la transición es rara, suma hasta 40 pts
-            pl.when(pl.col("is_anomaly") == -1).then(30).otherwise(0) + # Si ML dice anomalía, suma 30 pts
-            pl.when(pl.col("entry_mode").str.contains("90")).then(30).otherwise(0) # Si es banda magnética (90), suma 30 pts
-        ).alias("RISK_SCORE")
-    )
-
-    # --- 4. INTERFAZ VISUAL (DASHBOARD) ---
-    
-    # KPIs
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Transacciones", f"{df.height:,}")
-    c2.metric("Monto Total", f"S/ {df['monto'].sum():,.2f}")
-    c3.metric("Detectadas ML", f"{df_scored.filter(pl.col('is_anomaly') == -1).height}")
-    c4.metric("Card Testing (N7)", f"{df.filter(pl.col('resp_code') == 'N7').height}")
-
-    tab1, tab2, tab3 = st.tabs(["📊 Matriz de Riesgo", "🔗 Cadenas de Markov", "🧮 Optimizador de Costos"])
-
-    with tab1:
-        st.subheader("Análisis de Riesgo: Score vs Monto")
-        umbral_usuario = st.slider("Simular Umbral de Bloqueo (Score)", 0, 100, 80)
-        
-        # Gráfico Scatter
-        fig = px.scatter(
-            df_scored.sample(min(2000, df.height)).to_pandas(), # Sample para velocidad
-            x="RISK_SCORE", 
-            y="monto",
-            color="grupo_respuesta",
-            hover_data=["pan_mascara", "comercio", "transicion_markov"],
-            title="Matriz de Riesgo (Los puntos arriba a la derecha son críticos)",
-            color_discrete_map={"APROBADO": "green", "DATOS_MALOS": "red"}
-        )
-        fig.add_vline(x=umbral_usuario, line_dash="dash", line_color="red", annotation_text="CORTE")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Tabla de Alto Riesgo
-        st.write("#### 🚨 Top Transacciones Sospechosas")
-        st.dataframe(
-            df_scored.filter(pl.col("RISK_SCORE") > umbral_usuario)
-            .sort("RISK_SCORE", descending=True)
-            .select(["fecha_hora", "pan_mascara", "comercio", "monto", "transicion_markov", "RISK_SCORE"])
-            .head(50).to_pandas()
-        )
-
-    with tab2:
-        st.subheader("Visualización de Procesos Estocásticos")
-        st.markdown("Mapa de calor de cómo se mueven las transacciones entre estados.")
-        
-        # Heatmap
-        heatmap_data = df_scored.pivot(values="monto", index="prev_resp", columns="grupo_respuesta", aggregate_function="count").fill_null(0)
-        z = heatmap_data.select(pl.all().exclude("prev_resp")).to_numpy()
-        x = heatmap_data.columns[1:]
-        y = heatmap_data["prev_resp"].to_list()
-        
-        fig_heat = go.Figure(data=go.Heatmap(z=z, x=x, y=y, colorscale='Viridis'))
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-    with tab3:
-        st.subheader("Optimización Financiera del Umbral")
-        col_cost1, col_cost2 = st.columns(2)
-        costo_fp = col_cost1.number_input("Costo por Molestar Cliente (S/)", value=50)
-        
-        if st.button("🚀 Calcular Umbral Óptimo"):
-            # Simulación Vectorizada
-            scores = df_scored["RISK_SCORE"].to_numpy()
-            montos = df_scored["monto"].to_numpy()
-            # Asumimos que los que tienen 'DATOS_MALOS' o 'NO_FONDOS' son el fraude real para calibrar
-            is_fraud_real = df_scored["grupo_respuesta"].is_in(["DATOS_MALOS", "NO_FONDOS"]).to_numpy()
-            
-            results = []
-            for t in range(0, 101, 2): # Saltos de 2 para velocidad
-                pred_fraud = scores >= t
-                
-                # Dinero perdido por dejar pasar fraude (FN)
-                loss_fraud = np.sum(montos[(is_fraud_real) & (~pred_fraud)])
-                
-                # Dinero perdido por bloquear cliente bueno (FP)
-                loss_friction = np.sum((~is_fraud_real) & (pred_fraud)) * costo_fp
-                
-                results.append({"Umbral": t, "Total_Cost": loss_fraud + loss_friction})
-            
-            df_opt = pl.DataFrame(results)
-            best_t = df_opt.sort("Total_Cost").row(0, named=True)
-            
-            st.success(f"✅ El punto óptimo financiero es cortar en el Score: **{best_t['Umbral']}**")
-            
-            fig_opt = px.line(df_opt.to_pandas(), x="Umbral", y="Total_Cost", title="Curva de Costo Total")
-            fig_opt.add_vline(x=best_t['Umbral'], line_dash="dash", annotation_text="ÓPTIMO")
-            st.plotly_chart(fig_opt, use_container_width=True)
-
-else:
-    st.info("👆 Sube tu archivo CSV o espera a que cargue la simulación.")
+    corr = df_clean.select(pl.corr("ACF-MONTO ORIGINAL TRX", "SCORE DINAMICO")).item()
+    print(f"\nCorrelación Monto vs Score Monitor: {corr}")
+except:
+    print("No se pudo calcular correlación (revisar tipos de datos)")
