@@ -7,30 +7,35 @@ import plotly.graph_objects as go
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import OrdinalEncoder
 
-st.set_page_config(page_title="🛡️ Monitor+ Expert Dashboard", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="🛡️ Monitor+ Fraud Hunter", layout="wide", initial_sidebar_state="expanded")
 
+# Estilos CSS para resaltar alertas
 st.markdown("""
 <style>
-    .risk-high {background-color: #ffcccc; padding: 10px; border-radius: 5px;}
-    .risk-med {background-color: #fff4cc; padding: 10px; border-radius: 5px;}
+    .metric-card {background-color: #f0f2f6; border-left: 5px solid #ff4b4b; padding: 10px; border-radius: 5px;}
+    .stTabs [data-baseweb="tab-list"] {gap: 10px;}
+    .stTabs [data-baseweb="tab"] {height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px;}
+    .stTabs [aria-selected="true"] {background-color: #ff4b4b; color: white;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ Monitor+ Fraud Hunter: Deep Analytics")
-st.markdown("**Fuente:** Journals Monitor Plus (ACF) | **Modelos:** Markov + Isolation Forest + Reglas Expertas (TVR/Entry Mode)")
+st.title("🛡️ Monitor+ Fraud Hunter: Análisis Forense")
+st.markdown("**Analítica:** Polars + Markov Chains + Isolation Forest | **Input:** Journal Monitor Plus (Excel)")
 
-# --- 1. CARGA Y PROCESAMIENTO ---
+# --- 1. FUNCIÓN DE CARGA Y PROCESAMIENTO ---
 @st.cache_data
-def load_data(uploaded_file):
+def load_and_process_data(uploaded_file):
     if uploaded_file is None: return None
     
     try:
-        # Usamos Pandas para leer el Excel sucio (saltando 4 filas)
-        # Ajusta 'header=4' si la fila 5 es la cabecera real
+        # A. LECTURA CON PANDAS (Saltando basura)
+        # header=4: El encabezado real está en la fila 5 (índice 4)
+        # dtype=str: Leemos todo como texto para evitar errores de formato en tarjetas
         df_pd = pd.read_excel(uploaded_file, header=4, dtype=str)
         df = pl.from_pandas(df_pd)
         
-        # --- A. MAPEO DE COLUMNAS REALES (Basado en tus imágenes) ---
+        # B. MAPEO DE COLUMNAS (Tus nombres reales vs Nombres internos)
         col_map = {
             "ACF-NUMERO DE TARJETA ENCRIPTADO AES": "pan",
             "ACF-MONTO ORIGINAL TRX": "monto",
@@ -40,168 +45,243 @@ def load_data(uploaded_file):
             "ACF-COD RPTA": "resp_code",
             "ACF-ENTRY MODE": "entry_mode",
             "ACF-MCC +": "mcc",
-            "SCORE DINAMICO": "score_monitor",     # Score del proveedor
-            "ACF-TVR": "tvr",                    # Variable técnica experta
-            "CC : K07_COUNTD_APROBADAS": "velocity_daily_count" # Variable pre-calculada
+            "SCORE DINAMICO": "score_monitor",     
+            "ACF-TVR": "tvr",
+            "CC : K07_COUNTD_APROBADAS": "velocity_count" # Contador pre-calculado de Monitor
         }
         
-        # Filtramos y renombramos solo lo que existe
-        available_cols = [c for c in col_map.keys() if c in df.columns]
-        df = df.select(available_cols).rename({k:v for k,v in col_map.items() if k in available_cols})
+        # Filtrar solo columnas existentes para evitar errores
+        avail_cols = [c for c in col_map.keys() if c in df.columns]
+        df = df.select(avail_cols).rename({k:v for k,v in col_map.items() if k in avail_cols})
         
-        # --- B. LIMPIEZA Y CASTING ---
+        # C. LIMPIEZA Y CASTING
+        # Limpiar montos (quitar comas) y scores
         df = df.with_columns([
             pl.col("monto").str.replace(",", "").cast(pl.Float64, strict=False).fill_null(0),
-            pl.col("score_monitor").cast(pl.Float64, strict=False).fill_null(0),
-            pl.col("velocity_daily_count").cast(pl.Float64, strict=False).fill_null(0)
+            pl.col("score_monitor").cast(pl.Float64, strict=False).fill_null(0)
         ])
         
-        # Crear Datetime completo
-        # Asumiendo formato DDMMAA o similar en Monitor, ajusta el format string si falla
-        # Aquí concatenamos fecha y hora para tener precisión
-        df = df.with_columns(
-            (pl.col("fecha") + " " + pl.col("hora")).alias("datetime_str")
-        )
-        
-        # Intentar conversión de fecha (Manejo de errores simple)
-        try:
-            df = df.with_columns(
-                pl.col("datetime_str").str.to_datetime(format="%Y%m%d %H%M%S", strict=False).alias("timestamp")
-            )
-        except:
-             # Fallback si el formato es distinto (ej. Excel serial date)
-             df = df.with_columns(pl.lit(None).alias("timestamp"))
+        if "velocity_count" in df.columns:
+            df = df.with_columns(pl.col("velocity_count").cast(pl.Float64, strict=False).fill_null(0))
+        else:
+            df = df.with_columns(pl.lit(0).alias("velocity_count"))
 
-        # --- C. INGENIERÍA DE VARIABLES (FEATURE ENGINEERING) ---
+        # D. INGENIERÍA DE VARIABLES (Feature Engineering)
         
         # 1. Limpieza de Comercio
         df = df.with_columns(
-            pl.col("comercio_sucio").str.replace(r"[\*#].*$", "").str.strip_chars().alias("comercio")
+            pl.col("comercio_sucio")
+            .str.replace(r"^(IZIPAY|NIUBIZ|CULQI)\s*", "")
+            .str.replace(r"[\*#].*$", "")
+            .str.strip_chars()
+            .alias("comercio")
         )
         
-        # 2. Flag Banda Magnética (Entry Mode empieza con 90 o 02)
-        # Entry mode suele venir como '051', '901'. Tomamos los 2 primeros chars.
+        # 2. Detección de Banda Magnética / Clonación
+        # Si Entry Mode empieza con '90', '02' o '80' (Fallback), es riesgo alto
         df = df.with_columns(
-            pl.col("entry_mode").str.slice(0, 2).alias("entry_mode_clean")
+            pl.col("entry_mode").str.slice(0, 2).alias("entry_mode_short")
         )
         df = df.with_columns(
-            pl.when(pl.col("entry_mode_clean").is_in(['90', '02', '80'])).then(1).otherwise(0).alias("is_risky_entry")
+            pl.when(pl.col("entry_mode_short").is_in(['90', '02', '80'])).then(1).otherwise(0).alias("is_magnetic_stripe")
         )
-
+        
         # 3. Categorización de Respuesta para Markov
+        # Agrupamos los 100+ códigos en 4 familias lógicas
         df = df.with_columns(
-            pl.when(pl.col("resp_code") == "00").then(pl.lit("OK"))
-            .when(pl.col("resp_code").is_in(["51", "61"])).then(pl.lit("NO_FONDOS"))
-            .when(pl.col("resp_code").is_in(["N7", "55", "54"])).then(pl.lit("FRAUDE_TECNICO"))
-            .otherwise(pl.lit("OTRO"))
+            pl.when(pl.col("resp_code") == "00").then(pl.lit("APROBADO"))
+            .when(pl.col("resp_code").is_in(["51", "61", "65"])).then(pl.lit("NO_FONDOS"))
+            .when(pl.col("resp_code").is_in(["N7", "55", "54", "14", "75"])).then(pl.lit("FRAUDE_TECNICO")) # Ojo aquí
+            .otherwise(pl.lit("OTRO_ERROR"))
             .alias("grupo_resp")
+        )
+        
+        # 4. Creación de Secuencias (Markov)
+        # Ordenamos por tarjeta para ver la historia
+        # Usamos row_index como proxy de tiempo si la fecha falla
+        df = df.with_row_index("idx").sort(["pan", "idx"])
+        
+        df = df.with_columns([
+            pl.col("grupo_resp").shift(1).over("pan").fill_null("START").alias("prev_resp"),
+            pl.col("monto").shift(1).over("pan").fill_null(0).alias("prev_monto")
+        ])
+        
+        df = df.with_columns(
+            (pl.col("prev_resp") + " -> " + pl.col("grupo_resp")).alias("transicion_markov")
         )
         
         return df
 
     except Exception as e:
-        st.error(f"Error procesando data: {e}")
+        st.error(f"Error crítico procesando el archivo: {e}")
         return None
 
-# --- UI PRINCIPAL ---
-uploaded_file = st.sidebar.file_uploader("Cargar Journal Monitor+ (Excel)", type=["xlsx"])
-df = load_data(uploaded_file)
+# --- SIDEBAR: CONTROLES ---
+st.sidebar.header("📂 Panel de Control")
+uploaded_file = st.sidebar.file_uploader("Cargar Journal (Excel)", type=["xlsx"])
 
-if df is not None:
-    # --- MODELADO ---
+if uploaded_file is not None:
+    with st.spinner("Procesando millones de datos con Polars..."):
+        df = load_and_process_data(uploaded_file)
     
-    # 1. CADENAS DE MARKOV (Secuencialidad)
-    # Ordenamos por tarjeta y tiempo (si timestamp falló, usa índice original implícito)
-    df = df.with_row_index("idx").sort(["pan", "idx"])
-    
-    df = df.with_columns([
-        pl.col("grupo_resp").shift(1).over("pan").fill_null("START").alias("prev_resp"),
-        pl.col("monto").shift(1).over("pan").fill_null(0).alias("prev_monto")
-    ])
-    
-    df = df.with_columns(
-        (pl.col("prev_resp") + " -> " + pl.col("grupo_resp")).alias("transicion")
-    )
-    
-    # Calcular rareza de transición
-    trans_counts = df.group_by("transicion").count()
-    total = trans_counts["count"].sum()
-    trans_probs = trans_counts.with_columns((pl.col("count")/total).alias("prob_markov"))
-    df_scored = df.join(trans_probs, on="transicion", how="left")
-
-    # 2. ISOLATION FOREST (Anomalía Multivariada)
-    # Usamos Score de Monitor + Monto + Velocity + Risk Entry
-    X = df_scored.select(["monto", "score_monitor", "velocity_daily_count", "is_risky_entry"]).to_pandas().fillna(0)
-    
-    model = IsolationForest(contamination=0.02, random_state=42)
-    df_scored = df_scored.with_columns(
-        pl.Series(model.fit_predict(X)).alias("anomaly_if") # -1 es anomalía
-    )
-    
-    # 3. SCORE FINAL PROPIO
-    # Combinamos: Score Monitor (Base) + Anomalía IF + Rareza Markov + Regla Experta (Banda)
-    df_scored = df_scored.with_columns(
-        (
-            (pl.col("score_monitor") * 0.5) + # Confiamos en Monitor+
-            ((1 - pl.col("prob_markov")) * 200) + # Si la transición es rara, sube mucho
-            pl.when(pl.col("anomaly_if") == -1).then(300).otherwise(0) +
-            (pl.col("is_risky_entry") * 500) # Si es banda magnética, castigo duro
-        ).alias("MYKE_SCORE")
-    )
-
-    # --- DASHBOARD ---
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Tx", df.height)
-    c2.metric("Monto Total", f"S/ {df['monto'].sum():,.2f}")
-    c3.metric("Banda Magnética/Fallback", df.filter(pl.col("is_risky_entry") == 1).height, delta_color="inverse")
-    c4.metric("N7 Detectados", df.filter(pl.col("resp_code") == "N7").height, delta_color="inverse")
-
-    tab1, tab2, tab3 = st.tabs(["🚨 Alertas Prioritarias", "🧠 Análisis Avanzado", "📊 Distribuciones"])
-    
-    with tab1:
-        st.subheader("Top Transacciones para Bloqueo Inmediato")
-        st.markdown("Ordenado por **Myke Score** (Combinación de Monitor+, IA y Reglas).")
+    if df is not None:
+        # --- MODELADO (SE ENTRENA CON TODA LA DATA) ---
         
-        umbral = st.slider("Sensibilidad de Score", 0, 2000, 800)
+        # 1. Markov Scoring (Rareza de Transición)
+        trans_counts = df.group_by("transicion_markov").count()
+        total_trans = trans_counts["count"].sum()
+        trans_probs = trans_counts.with_columns((pl.col("count")/total_trans).alias("prob_markov"))
+        df_scored = df.join(trans_probs, on="transicion_markov", how="left")
         
-        top_risk = df_scored.filter(pl.col("MYKE_SCORE") > umbral).sort("MYKE_SCORE", descending=True)
-        
-        st.dataframe(
-            top_risk.select([
-                "pan", "monto", "comercio", "resp_code", "entry_mode", 
-                "transicion", "score_monitor", "MYKE_SCORE"
-            ]).to_pandas(),
-            use_container_width=True
+        # 2. Isolation Forest (Anomalías)
+        # Features: Monto, Velocity, Score Monitor, Banda Magnética
+        X = df_scored.select(["monto", "velocity_count", "score_monitor", "is_magnetic_stripe"]).to_pandas().fillna(0)
+        model_if = IsolationForest(contamination=0.03, random_state=42)
+        df_scored = df_scored.with_columns(
+            pl.Series(model_if.fit_predict(X)).alias("anomaly_if") # -1 es anomalía
         )
         
-    with tab2:
-        c_a, c_b = st.columns(2)
-        with c_a:
-            st.subheader("Relación: Score Monitor vs. Anomalía Detectada")
-            fig_sc = px.scatter(
-                df_scored.sample(min(5000, df.height)).to_pandas(),
-                x="score_monitor", y="monto", color="anomaly_if",
-                title="¿Coincide nuestra IA con Monitor Plus?",
-                color_discrete_map={1: "blue", -1: "red"} # Rojo = Anomalía nuestra
-            )
-            st.plotly_chart(fig_sc, use_container_width=True)
-            
-        with c_b:
-            st.subheader("Matriz de Transición (Markov)")
-            heatmap_data = df_scored.pivot(values="monto", index="prev_resp", columns="grupo_resp", aggregate_function="count").fill_null(0)
-            z = heatmap_data.select(pl.all().exclude("prev_resp")).to_numpy()
-            x = heatmap_data.columns[1:]
-            y = heatmap_data["prev_resp"].to_list()
-            
-            fig_heat = go.Figure(data=go.Heatmap(z=z, x=x, y=y, colorscale='Viridis'))
-            fig_heat.update_layout(title="Patrones de Ataque (Ej: N7 -> OK)")
-            st.plotly_chart(fig_heat, use_container_width=True)
+        # 3. MYKE SCORE (Score Híbrido Final)
+        # Fórmula: Monitor(30%) + Markov(Rareza)(30%) + ML(Anomalía)(20%) + ReglaBanda(20%)
+        df_scored = df_scored.with_columns(
+            (
+                (pl.col("score_monitor") * 0.5) + 
+                ((1 - pl.col("prob_markov")) * 300) + 
+                pl.when(pl.col("anomaly_if") == -1).then(400).otherwise(0) +
+                (pl.col("is_magnetic_stripe") * 800) # Penalización máxima por banda magnética
+            ).alias("MYKE_SCORE")
+        )
 
-    with tab3:
-        st.subheader("Entry Mode: ¿Estás recibiendo ataques de clonación?")
-        fig_bar = px.bar(df_scored.group_by("entry_mode_clean").count().to_pandas(), x="entry_mode_clean", y="count")
-        st.plotly_chart(fig_bar)
+        # --- FILTRO POR COMERCIO (PARA EL ANÁLISIS INDIVIDUAL) ---
+        st.sidebar.divider()
+        st.sidebar.subheader("🔍 Filtro de Análisis")
+        
+        # Lista de comercios ordenada alfabéticamente
+        comercios_list = ["TODOS"] + sorted(df_scored["comercio"].unique().to_list())
+        comercio_sel = st.sidebar.selectbox("Seleccionar Comercio a Auditar:", comercios_list)
+        
+        # Filtrar datos para visualización
+        if comercio_sel != "TODOS":
+            df_view = df_scored.filter(pl.col("comercio") == comercio_sel)
+        else:
+            df_view = df_scored
+            
+        # --- DASHBOARD ---
+        
+        # KPIs Superiores
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("Transacciones", f"{df_view.height:,}")
+        kpi2.metric("Monto Total", f"S/ {df_view['monto'].sum():,.2f}")
+        
+        # Conteo de N7 (Card Testing)
+        cant_n7 = df_view.filter(pl.col("resp_code") == "N7").height
+        kpi3.metric("Intentos N7 (Testing)", cant_n7, delta="Alerta" if cant_n7 > 5 else None, delta_color="inverse")
+        
+        # Conteo de Banda Magnética
+        cant_banda = df_view.filter(pl.col("is_magnetic_stripe") == 1).height
+        kpi4.metric("Banda Magnética (Clonación)", cant_banda, delta="Crítico" if cant_banda > 0 else None, delta_color="inverse")
+
+        # Pestañas
+        tab1, tab2, tab3, tab4 = st.tabs(["🚨 Matriz de Riesgo", "🔗 Cadenas de Markov", "💳 Modo de Entrada", "📧 Decisión & Correo"])
+
+        with tab1:
+            st.subheader("Matriz de Riesgo: Score vs Monto")
+            st.caption("Los puntos rojos son anomalías detectadas por IA. El eje X es el Score Monitor+.")
+            
+            fig = px.scatter(
+                df_view.to_pandas(),
+                x="score_monitor", 
+                y="monto", 
+                color="anomaly_if",
+                size="is_magnetic_stripe", # Puntos más grandes si es banda magnética
+                hover_data=["pan", "resp_code", "transicion_markov", "MYKE_SCORE"],
+                color_discrete_map={1: "blue", -1: "red"},
+                title=f"Perfil de Riesgo: {comercio_sel}"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.write("#### Top Transacciones Riesgosas (Myke Score)")
+            st.dataframe(
+                df_view.sort("MYKE_SCORE", descending=True)
+                .select(["pan", "fecha", "monto", "resp_code", "entry_mode", "transicion_markov", "MYKE_SCORE"])
+                .head(20).to_pandas(),
+                use_container_width=True
+            )
+
+        with tab2:
+            st.subheader("Análisis de Secuencia (Markov)")
+            st.caption("Si ves cuadros amarillos/verdes en la columna 'APROBADO' viniendo de 'FRAUDE_TECNICO', es un ataque exitoso.")
+            
+            heatmap_data = df_view.pivot(values="monto", index="prev_resp", columns="grupo_resp", aggregate_function="count").fill_null(0)
+            if not heatmap_data.is_empty():
+                z = heatmap_data.select(pl.all().exclude("prev_resp")).to_numpy()
+                x = heatmap_data.columns[1:]
+                y = heatmap_data["prev_resp"].to_list()
+                
+                fig_heat = go.Figure(data=go.Heatmap(z=z, x=x, y=y, colorscale='Viridis', text=z, texttemplate="%{text}"))
+                fig_heat.update_layout(title="Mapa de Transiciones")
+                st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("No hay suficientes datos para generar el mapa de calor.")
+
+        with tab3:
+            st.subheader("Análisis de Clonación (Entry Mode)")
+            entry_counts = df_view.group_by("entry_mode").count().sort("count", descending=True).to_pandas()
+            
+            c_chart, c_exp = st.columns([2, 1])
+            with c_chart:
+                fig_bar = px.bar(entry_counts, x="entry_mode", y="count", color="entry_mode", title="Distribución de Modos de Entrada")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            
+            with c_exp:
+                st.info("""
+                **Guía Rápida:**
+                * **051 / 052**: Chip (Seguro)
+                * **071**: Contactless (Seguro)
+                * **901 / 021**: Banda Magnética (**ALERTA CLONACIÓN**)
+                * **80x**: Fallback (**ALERTA CHIP DAÑADO/FORZADO**)
+                """)
+
+        with tab4:
+            st.subheader("Generador de Decisión")
+            
+            riesgo_n7 = cant_n7 > 10
+            riesgo_clonacion = cant_banda > 0
+            riesgo_ia = df_view.filter((pl.col("anomaly_if") == -1) & (pl.col("monto") > 500)).height > 0
+            
+            if riesgo_n7:
+                st.error("🔴 **RECOMENDACIÓN: BLOQUEO INMEDIATO (Card Testing)**")
+                st.code(f"""
+ASUNTO: Bloqueo Preventivo - {comercio_sel}
+
+Hola,
+Solicitamos el bloqueo del comercio {comercio_sel} por Card Testing.
+Evidencia: {cant_n7} transacciones con código N7 (CVV Inválido) y patrones secuenciales anómalos.
+                """)
+            
+            elif riesgo_clonacion:
+                st.error("🔴 **RECOMENDACIÓN: BLOQUEO INMEDIATO (Clonación)**")
+                st.code(f"""
+ASUNTO: Alerta de Fraude (Clonación) - {comercio_sel}
+
+Hola,
+Solicitamos desafiliación de {comercio_sel}.
+Evidencia: Uso de Banda Magnética (Entry Mode 90/02) en {cant_banda} transacciones, indicativo de Skimming.
+                """)
+                
+            elif riesgo_ia:
+                st.warning("🟡 **RECOMENDACIÓN: BLOQUEO PREVENTIVO (Anomalía)**")
+                st.code(f"""
+ASUNTO: Revisión de Riesgo - {comercio_sel}
+
+Hola,
+Detectamos comportamiento anómalo en {comercio_sel}.
+Evidencia: Montos y horarios fuera del perfil habitual (Score de Anomalía Alto). Recomendamos bloqueo preventivo.
+                """)
+            
+            else:
+                st.success("🟢 **RECOMENDACIÓN: NO BLOQUEAR**")
+                st.write("El comercio tiene alto volumen pero indicadores técnicos sanos.")
 
 else:
-    st.info("Esperando archivo Monitor Plus...")
+    st.info("👋 Sube el archivo Excel de Monitor Plus para comenzar.")
