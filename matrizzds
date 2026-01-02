@@ -1,0 +1,35 @@
+¡Claro que sí! Lo recuerdo perfectamente. Es la parte más importante (y la más "tramposa") de tu análisis, porque el significado del color cambia dependiendo de qué hoja estés mirando.
+Aquí tienes el resumen definitivo de cómo interpretar esa matriz de Hit Rate (Eje Y) vs. Volumen (Eje X):
+1. Si estás mirando REGLAS (Evaluas tu "Cerebro") 🧠
+Aquí estás juzgando la calidad de la lógica que creó tu equipo.
+ * 🟢 Hit Rate ALTO (Verde):
+   * Interpretación: Es un "Francotirador".
+   * Significado: La regla es precisa. Casi siempre que dispara, le da a un fraude.
+   * Acción: MANTENER. Es una regla estrella.
+ * 🔴 Hit Rate BAJO (Rojo):
+   * Interpretación: Es una "Escopeta de Feria".
+   * Significado: La regla es TORPE. Está bloqueando a muchísimos clientes buenos (Falsos Positivos) para atrapar a pocos malos.
+   * Acción: APAGAR o CORREGIR. Es un error interno.
+2. Si estás mirando COMERCIOS (Evaluas el "Lugar") 🏪
+Aquí estás juzgando la naturaleza del negocio donde se intenta comprar. Aquí la lógica se invierte.
+ * 🟢 Hit Rate ALTO (Verde):
+   * Interpretación: Es una "Zona de Guerra" o Fachada.
+   * Significado: Casi todo lo que viene de aquí es fraude. No hay clientes reales, o muy pocos.
+   * Acción: BLOQUEAR (Blacklist) o contener con reglas muy duras.
+ * 🔴 Hit Rate BAJO (Rojo):
+   * Interpretación: Es una "VÍCTIMA" (Oportunidad de Oro).
+   * Significado: Es un comercio legítimo (tipo Uber, Netflix, Farmacia). Tus reglas lo están atacando por error. La mayoría de los bloqueos aquí son gente honesta.
+   * Acción: LIBERAR (Whitelist).
+   * Por qué: Porque al liberarlo, dejas de molestar a los clientes buenos y el banco gana todo ese dinero que estaba rechazando.
+Cuadro Resumen (La "Chuleta")
+| Color / Hit Rate | En una REGLA significa... | En un COMERCIO significa... |
+|---|---|---|
+| 🔴 ROJO (Bajo) | ¡Mala Regla! (Error) ❌
+Está fallando mucho. | ¡Comercio Bueno! (Oportunidad) 💰
+Lo estamos atacando injustamente. |
+| 🟢 VERDE (Alto) | ¡Buena Regla! (Éxito) ✅
+Funciona perfecto. | ¡Comercio Malo! (Peligro) 💀
+Es un nido de fraudes. |
+En resumen:
+ * En Reglas, buscas el Verde.
+ * En Comercios, el Rojo (Bajo Hit Rate) es donde está el dinero "escondido" que puedes recuperar haciendo Whitelist.
