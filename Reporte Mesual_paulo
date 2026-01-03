@@ -1,0 +1,48 @@
+import pandas as pd
+import pyodbc
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+
+# 1. CONEXIÓN A ACCESS Y EXTRACCIÓN
+# Asegúrate de tener el driver instalado. Si es Access moderno es este:
+conn_str = (
+    r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+    r'DBQ=C:\Ruta\A\Tu\BaseDeDatos.accdb;'
+)
+conn = pyodbc.connect(conn_str)
+
+# Query SQL para filtrar directamente desde la base (es más rápido que filtrar en pandas si hay mucha data)
+sql_query = """
+SELECT * FROM Calificaciones 
+WHERE Estado = 'Fraude' 
+AND Fecha >= #01/01/2025#
+"""
+
+# Cargar a DataFrame
+df = pd.read_sql(sql_query, conn)
+conn.close()
+
+# 2. LIMPIEZA O TRANSFORMACIÓN ADICIONAL (Opcional)
+# Aquí haces tus cálculos de Python si necesitas columnas nuevas
+# df['NuevaColumna'] = ...
+
+# 3. PEGAR DATOS EN LA PLANTILLA EXCEL
+ruta_plantilla = 'C:/Ruta/plantilla_reporte.xlsx'
+ruta_salida = 'C:/Ruta/Reporte_Fraude_Final.xlsx'
+
+# Cargar el libro y la hoja de datos
+wb = load_workbook(ruta_plantilla)
+ws = wb['Data'] # Asegúrate que tu hoja en el excel se llame 'Data'
+
+# Limpiar datos viejos (manteniendo encabezados si están en la fila 1)
+# Esto borra desde la fila 2 hasta el final
+ws.delete_rows(2, ws.max_row)
+
+# Escribir el DataFrame nuevo
+for r in dataframe_to_rows(df, index=False, header=False):
+    ws.append(r)
+
+# Guardar como un archivo nuevo (para no dañar la plantilla)
+wb.save(ruta_salida)
+
+print("¡Proceso terminado! Abre el Excel y refresca las tablas.")
