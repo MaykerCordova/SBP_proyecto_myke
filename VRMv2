@@ -1,0 +1,149 @@
+import pandas as pd
+import pyodbc
+import numpy as np
+import warnings
+
+# Ignoramos alertas de pandas para mantener la consola limpia
+warnings.filterwarnings('ignore')
+
+# ==============================================================================
+# 1. CONFIGURACIÓN Y CONEXIÓN (Igual que antes)
+# ==============================================================================
+ruta_db = r"C:\Users\s4930359\The Bank of Nova Scotia\Flores Hilario, Marcial - BBDD\BBDD_VRM.accdb"
+nombre_tabla = 'BBDD_VRM'
+ruta_salida_parquet = r"C:\Users\s4930359\OneDrive - The Bank of Nova Scotia\HERRAMIENTAS\Data_VRM_Final.parquet"
+
+print("🔄 [1/5] Conectando a la Base de Datos...")
+
+try:
+    conn_str = (r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=' + ruta_db + ';')
+    conn = pyodbc.connect(conn_str)
+    query = f"SELECT * FROM [{nombre_tabla}]"
+    df_ori = pd.read_sql(query, conn)
+    conn.close()
+    print(f"   ✅ Datos cargados: {len(df_ori):,} filas.")
+except Exception as e:
+    print(f"   ❌ Error crítico de conexión: {e}")
+    exit()
+
+# ==============================================================================
+# 2. LIMPIEZA INICIAL Y SELECCIÓN DE COLUMNAS
+# ==============================================================================
+print("🧹 [2/5] Limpiando datos...")
+
+# Lista de columnas exactas que necesitas (Basado en tu imagen)
+columnas_finales = [
+    'TARJETA', 'VISA TRANSSACTION ID',
+    'Fecha', 'Dia_reporte', 'AnoMes_reporte', 'MONTO USD', 'TIPO DE MONEDA',
+    'NOMBRE REGLA', 'CODIGO REGLA', 'RTD REGLA', 'CVV2',
+    'CALIFICACION', 'Gestion', # <--- OJO: Esta es la clave del status
+    'BIN', 'MCC', 'NOMBRE DE COMERCIO', 'CODIGO DE COMERCIO',
+    'CODIGO PAIS', 'LOCALIDAD',
+    'ENTRY MODE', 'ECI', 'Entidad',
+    'COD REDP 59', 'TIPO DE TOKEN', 'NUMERO DE TOKEN'
+]
+
+# Creamos el DF de trabajo solo con lo necesario
+# Usamos reindex para evitar error si alguna columna no existe en el Access
+df = df_ori.reindex(columns=columnas_finales)
+
+# A. Formato de Fecha
+df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+
+# B. Limpieza de la columna de Estado (Crucial para los flags)
+# Asumimos que la columna en Access se llama 'CALIFICACION'
+col_status = 'CALIFICACION'
+df[col_status] = df[col_status].fillna('DESCONOCIDO').astype(str)
+# Estandarizamos a Mayúsculas y sin espacios (Ej: " Good " -> "GOOD")
+df['Status_Clean'] = df[col_status].str.upper().str.strip()
+
+# ==============================================================================
+# 3. LÓGICA DE NEGOCIO: CATEGORIZACIÓN (El Cerebro)
+# ==============================================================================
+print("🧠 [3/5] Aplicando Reglas de Negocio...")
+
+# --- A. Definición de Listas (Ajusta los textos si en tu base vienen en Español) ---
+# Según tus fotos, en tu base vienen en INGLÉS ('GOOD', 'FRAUD', etc.)
+estados_fraude = ['FRAUD', 'FRAUDE']
+estados_fp     = ['GOOD', 'BUENA', 'BUENO']     # Falso Positivo confirmado
+estados_pend   = ['PENDING', 'PENDIENTE']       # Dudoso
+estados_nuevos = ['NEW', 'NUEVA', 'NUEVO']      # Sin trabajar
+
+# --- B. Columna Legible para Filtros Visuales ---
+conditions_cat = [
+    df['Status_Clean'].isin(estados_fraude),
+    df['Status_Clean'].isin(estados_fp),
+    df['Status_Clean'].isin(estados_pend),
+    df['Status_Clean'].isin(estados_nuevos)
+]
+choices_cat = ['Fraude', 'Buena (FP)', 'Pendiente', 'Nuevo']
+
+df['Categoria_Final'] = np.select(conditions_cat, choices_cat, default='Otro')
+
+# ==============================================================================
+# 4. CREACIÓN DE FLAGS PARA RÁTIOS Y KPIs (Lo nuevo que pediste)
+# ==============================================================================
+print("🚩 [4/5] Calculando Indicadores de Eficiencia...")
+
+# --- FLAG 1: TU KPI (% de Insulto / Falso Positivo Normal) ---
+# Lógica: 
+#   1 = Nos equivocamos (Buena o Pendiente)
+#   0 = Acertamos (Fraude)
+#   NaN = New (No cuenta para el promedio)
+condiciones_insulto = [
+    df['Status_Clean'].isin(estados_fp + estados_pend), # Error
+    df['Status_Clean'].isin(estados_fraude),            # Acierto
+    df['Status_Clean'].isin(estados_nuevos)             # Ignorar
+]
+# En Power BI: El PROMEDIO de esta columna será tu % de Falso Positivo
+df['Flag_Insulto_Pct'] = np.select(condiciones_insulto, [1, 0, np.nan], default=np.nan)
+
+
+# --- FLAG 2: DENOMINADOR PARA RATIOS (Solo Fraudes) ---
+# Lógica: 1 solo si es Fraude. Sirve para dividir.
+df['Counter_Fraude'] = np.where(df['Status_Clean'].isin(estados_fraude), 1, 0)
+
+
+# --- FLAG 3: NUMERADOR PARA RATIO ESPECIALISTA (Sin New) ---
+# Lógica: 1 para todo lo que YA se trabajó (Excluye New).
+# En Power BI: SUM(Counter_Trabajado) / SUM(Counter_Fraude) = Ratio del Especialista
+df['Counter_Trabajado'] = np.where(~df['Status_Clean'].isin(estados_nuevos), 1, 0)
+
+
+# --- FLAG 4: NUMERADOR GLOBAL (Para Ratio Total) ---
+# Simplemente cuenta todo.
+df['Counter_Total_Alertas'] = 1
+
+
+# ==============================================================================
+# 5. ENRIQUECIMIENTO Y EXPORTACIÓN
+# ==============================================================================
+print("🚀 [5/5] Enriqueciendo y Exportando...")
+
+# A. Franja Horaria (Tal cual tu código original)
+def categorizar_hora(fecha):
+    if pd.isnull(fecha): return 'Desconocido'
+    h = fecha.hour
+    if 0 <= h < 6: return 'Madrugada (0-6)'
+    elif 6 <= h < 12: return 'Mañana (6-12)'
+    elif 12 <= h < 18: return 'Tarde (12-18)'
+    else: return 'Noche (18-24)'
+
+df['Franja_Horaria'] = df['Fecha'].apply(categorizar_hora)
+
+# B. Lag Internacional
+# Si el código pais es PE, PER o 604 es NO, sino SI.
+paises_locales = ['PE', 'PER', '604']
+df['Es_Internacional'] = np.where(
+    df['CODIGO PAIS'].astype(str).str.strip().isin(paises_locales), 
+    'NO', 
+    'SI'
+)
+
+# C. Guardado Final
+try:
+    df.to_parquet(ruta_salida_parquet, index=False)
+    print(f"✨ ÉXITO: Archivo exportado en: {ruta_salida_parquet}")
+    print("   📊 Listo para conectar a Power BI.")
+except Exception as e:
+    print(f"❌ Error al guardar Parquet: {e}")
