@@ -147,3 +147,70 @@ try:
     print("   📊 Listo para conectar a Power BI.")
 except Exception as e:
     print(f"❌ Error al guardar Parquet: {e}")
+
+## enrriquecimiento
+# ==============================================================================
+# SECCIÓN 4.X: ENRIQUECIMIENTO DE DATOS (BINES Y ENTRY MODE)
+# ==============================================================================
+
+print("📚 [4.1] Estandarizando Entry Mode y Aplicando Diccionario de BINES...")
+
+# 1. CORRECCIÓN ENTRY MODE (Tu confirmación)
+# Forzamos a que siempre tenga 2 dígitos (ej: '1' -> '01')
+if 'POS_ENTRY_MODE' in df.columns:
+    df['POS_ENTRY_MODE'] = df['POS_ENTRY_MODE'].astype(str).str.split('.').str[0].str.zfill(2)
+
+# ------------------------------------------------------------------------------
+# 2. DICCIONARIO MAESTRO DE BINES (Aquí pegas tu data real)
+# Estructura: 'BIN': ['EMISOR', 'MARCA', 'DETALLE']
+# ------------------------------------------------------------------------------
+BASE_BINES = {
+    # 'BIN'   : ['EMISOR',       'MARCA',      'DETALLE/GAMA']
+    '455123': ['Banco Uno',    'Visa',       'Platinum'],
+    '411111': ['Banco Uno',    'Visa',       'Clásica'],
+    '522222': ['Banco Dos',    'Mastercard', 'Black'],
+    '555555': ['Banco Dos',    'Mastercard', 'Gold'],
+    '499999': ['Banco Uno',    'Visa',       'Empresarial'],
+    # ... PEGA AQUÍ ABAJO TUS DEMÁS BINES SIGUIENDO EL MISMO FORMATO ...
+}
+
+# ------------------------------------------------------------------------------
+# 3. FUNCIÓN PARA BUSCAR EN EL DICCIONARIO
+# ------------------------------------------------------------------------------
+def enriquecer_bin(bin_code):
+    bin_code = str(bin_code)
+    
+    # A. Buscamos si el BIN exacto existe en tu diccionario
+    if bin_code in BASE_BINES:
+        datos = BASE_BINES[bin_code]
+        return datos[0], datos[1], datos[2] # Retorna (Emisor, Marca, Detalle)
+    
+    # B. Si NO está en el diccionario, aplicamos lógica por defecto
+    else:
+        # Lógica de Marca por defecto (4=Visa, 5=MC)
+        if bin_code.startswith('4'):
+            marca_default = 'Visa'
+        elif bin_code.startswith('5'):
+            marca_default = 'Mastercard'
+        else:
+            marca_default = 'Otro'
+            
+        return 'Otros Bancos', marca_default, 'Estándar'
+
+# ------------------------------------------------------------------------------
+# 4. APLICAR LA MAGIA AL DATAFRAME
+# ------------------------------------------------------------------------------
+
+# Aseguramos que existe la columna BIN
+df['BIN'] = df['TARJETA'].astype(str).str[:6]
+
+# Creamos las 3 columnas nuevas de un solo golpe
+# Esto aplica la función fila por fila
+datos_enriquecidos = df['BIN'].apply(lambda x: pd.Series(enriquecer_bin(x)))
+
+# Asignamos nombres a las columnas nuevas
+df['Banco_Emisor'] = datos_enriquecidos[0]
+df['Marca_Tarjeta'] = datos_enriquecidos[1]
+df['Segmento_Tarjeta'] = datos_enriquecidos[2] # Aquí tendrás Platinum, Black, etc.
+
+print("✅ BINES procesados. Nuevas columnas: Banco_Emisor, Marca_Tarjeta, Segmento_Tarjeta")
