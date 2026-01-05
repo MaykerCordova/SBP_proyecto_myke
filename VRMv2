@@ -214,3 +214,82 @@ df['Marca_Tarjeta'] = datos_enriquecidos[1]
 df['Segmento_Tarjeta'] = datos_enriquecidos[2] # Aquí tendrás Platinum, Black, etc.
 
 print("✅ BINES procesados. Nuevas columnas: Banco_Emisor, Marca_Tarjeta, Segmento_Tarjeta")
+##################################
+########### mejroar entry mode#####
+##################################
+# ==============================================================================
+# 4.1 TRADUCCIÓN MAESTRA DE ENTRY MODE (Basada en Diccionario ISO/VRM)
+# ==============================================================================
+
+print("📚 Interpretando Entry Mode según diccionario específico...")
+
+# 1. LIMPIEZA INICIAL (Sin zfill)
+# Convertimos a string y quitamos el ".0" si Excel lo puso, pero NO agregamos ceros.
+# Así '1' se queda como '1' y '01' se queda como '01'.
+if 'POS_ENTRY_MODE' in df.columns:
+    df['POS_ENTRY_MODE'] = df['POS_ENTRY_MODE'].astype(str).str.replace('.0', '', regex=False).str.strip()
+
+# 2. DICCIONARIO EXACTO (Transcrito de tu imagen)
+diccionario_entry_mode = {
+    # --- SUBFIELD 2: CAPACIDAD DE PIN (Códigos de 1 dígito) ---
+    '0': 'PIN: No especificado / Desconocido',
+    '1': 'PIN: Terminal TIENE teclado (PIN Capable)',
+    '2': 'PIN: Terminal NO TIENE teclado',
+    '8': 'PIN: Tiene teclado pero está inactivo/caído',
+
+    # --- SUBFIELD 1: MODO DE ENTRADA PAN (Códigos de 2 dígitos) ---
+    '00': 'Desconocido (Unknown)',
+    '01': 'Manual (PAN Manual Entry) ⚠️',
+    '02': 'Banda Magnética (Auto-entry)',
+    '03': 'Código de Barras',
+    '04': 'OCR (Lector Óptico)',
+    '05': 'Chip (Insertado / ICC)',
+    '06': 'Chip (Contactless Mapping)', # Poco común pero existe
+    '07': 'Contactless (M/Chip)',
+    '08': 'Contactless (M/Chip Mapping)',
+    '09': 'E-Commerce con Chip Remoto',
+    '10': 'Card on File (Credencial Guardada)',
+    
+    # Casos especiales de Fallback y Híbridos
+    '79': 'Híbrido (Chip falló en conexión)',
+    '80': 'Fallback (Chip falló -> Banda Magnética) ⚠️',
+    '81': 'E-Commerce (Incluyendo Chip)',
+    '82': 'Server Entry (Issuer/Vendor)',
+    
+    # Bandas y Contactless Legacy
+    '90': 'Banda Magnética (Full Track)',
+    '91': 'Contactless (Simulación Banda / Stripe)',
+    '92': 'Contactless (Mapping Service)',
+    '95': 'Chip con CVV poco confiable (Visa Only)'
+}
+
+# 3. FUNCIÓN DE TRADUCCIÓN
+def traducir_entry_mode(valor):
+    # Buscamos la coincidencia exacta
+    if valor in diccionario_entry_mode:
+        return diccionario_entry_mode[valor]
+    
+    # Si no está, devolvemos el código original para que investigues
+    return f"Código Desconocido ({valor})"
+
+# 4. APLICAMOS LA TRADUCCIÓN
+df['Desc_Entry_Mode'] = df['POS_ENTRY_MODE'].apply(traducir_entry_mode)
+
+# 5. GENERAMOS LA COLUMNA SIMPLIFICADA "PRESENTE vs NO PRESENTE"
+# Usamos la descripción traducida para agrupar
+def definir_presencia_v2(descripcion):
+    desc = descripcion.lower()
+    
+    # Palabras clave de PRESENCIA FÍSICA
+    if any(x in desc for x in ['chip', 'banda', 'contactless', 'pin:', 'manual']):
+        return 'Tarjeta Presente (CP)'
+    
+    # Palabras clave de NO PRESENTE
+    elif any(x in desc for x in ['e-commerce', 'server', 'file']):
+        return 'No Presente (CNP)'
+        
+    return 'Revisar / Otros'
+
+df['Tipo_Presencia'] = df['Desc_Entry_Mode'].apply(definir_presencia_v2)
+
+print("✅ Entry Mode traducido correctamente. Se respetó diferencia entre 1 y 01.")
