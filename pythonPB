@@ -58,3 +58,39 @@ prediccion = clf.fit_predict(datos_modelo)
 dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
 
 # Power BI mostrará el dataset final con la nueva columna 'Es_Anomalia_IA'
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+# --- CONFIGURACIÓN (SOLO TOCA AQUÍ) ---
+# Escribe EXACTAMENTE el nombre de tus columnas tal cual salen en Power BI
+columna_monto = "acf_monto_moneda_local"  # Tu columna de dinero
+columna_hora = "ACF-HORA TRX"             # Tu columna de hora (ej. 12:00:05 a.m.)
+
+# ---------------------------------------
+# EL CÓDIGO (NO TOCAR NADA ABAJO)
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+
+# 1. Limpiamos el MONTO (Lo forzamos a ser número)
+# 'coerce' significa: si encuentra texto basura, lo convierte en NaN (vacío) y luego en 0
+dataset['Monto_Limpio'] = pd.to_numeric(dataset[columna_monto], errors='coerce').fillna(0)
+
+# 2. Convertimos la HORA a número (0 a 23)
+# Forzamos que se lea como string primero para evitar errores de formato
+dataset['Hora_Temp'] = pd.to_datetime(dataset[columna_hora].astype(str), errors='coerce')
+dataset['Hora_Simple_Py'] = dataset['Hora_Temp'].dt.hour.fillna(0) 
+
+# 3. Preparamos los datos para la IA
+datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
+
+# 4. Ejecutamos el algoritmo 'Isolation Forest'
+# contamination=0.02 detecta el 2% más raro
+clf = IsolationForest(contamination=0.02, random_state=42)
+prediccion = clf.fit_predict(datos_modelo)
+
+# 5. Guardamos el resultado (-1 es anomalía, 1 es normal)
+dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
+
+# El resultado final se devuelve a Power BI
