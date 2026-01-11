@@ -26,3 +26,35 @@ dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
 dataset['Score_Rareza'] = clf.decision_function(datos_modelo) 
 
 # Power BI tomará el 'dataset' modificado
+$$$$$$$$$$
+
+
+# El dataset ya viene cargado automáticamente
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+
+# 1. LIMPIEZA DE DATOS (Vital)
+# Convertimos el MONTO a número. Si hay errores, pone 0.
+# CONFIRMA que tu columna se llame exactamente 'acf_monto_moneda_local'
+dataset['Monto_Limpio'] = pd.to_numeric(dataset['acf_monto_moneda_local'], errors='coerce').fillna(0)
+
+# 2. CREAMOS LA HORA SIMPLE DENTRO DE PYTHON
+# Usamos tu columna 'ACF-HORA TRX'. La convertimos a fecha y sacamos solo la HORA (0-23).
+# Si tu columna se llama diferente (ej. 'hf ahora TRX'), cambia el nombre aquí abajo:
+dataset['Hora_Convertida'] = pd.to_datetime(dataset['ACF-HORA TRX'].astype(str), errors='coerce')
+dataset['Hora_Simple_Py'] = dataset['Hora_Convertida'].dt.hour.fillna(0) 
+
+# 3. SELECCIONAMOS DATOS PARA EL CEREBRO (IA)
+# Usamos el Monto y la Hora (número) que acabamos de crear
+datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
+
+# 4. EL ALGORITMO (Detectando el ataque)
+# contamination=0.02 busca el 2% más raro
+clf = IsolationForest(contamination=0.02, random_state=42)
+prediccion = clf.fit_predict(datos_modelo)
+
+# 5. GUARDAMOS RESULTADO
+# -1 es Anomalía (SI), 1 es Normal (NO)
+dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
+
+# Power BI mostrará el dataset final con la nueva columna 'Es_Anomalia_IA'
