@@ -1,0 +1,198 @@
+import win32com.client
+import pandas as pd
+import os
+import time
+import datetime
+
+def verificar_excel_cerrado(ruta_excel):
+    """Verifica si el archivo está libre para escribir."""
+    if os.path.exists(ruta_excel):
+        try:
+            with open(ruta_excel, "a"): pass
+        except PermissionError: return False
+    return True
+
+def procesar_adjuntos_fraude_v2():
+    print("--- INICIANDO PROCESO DE ADJUNTOS (CON LÓGICA FANTASMA) ---")
+    
+    ruta_actual = os.getcwd()
+    archivo_final = os.path.join(ruta_actual, "Base_Comercios_Adjuntos.xlsx")
+    
+    # 1. VERIFICACIÓN DE SEGURIDAD
+    if not verificar_excel_cerrado(archivo_final):
+        print("❌ ERROR CRÍTICO: El Excel de destino está abierto. Ciérralo y reintenta.")
+        return
+
+    # 2. CONECTAR A OUTLOOK
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        inbox = outlook.GetDefaultFolder(6)
+        # Asegúrate de que esta carpeta exista
+        carpeta_origen = inbox.Folders("comercios_diarios")
+    except Exception as e:
+        print(f"Error accediendo a Outlook o la carpeta: {e}")
+        return
+
+    # --- ORDENAMIENTO CRUCIAL: DEL MÁS ANTIGUO AL MÁS NUEVO ---
+    items = carpeta_origen.Items
+    items.Sort("[ReceivedTime]", False) # False = Ascendente (Viejo -> Nuevo)
+    mensajes = items.Restrict("[UnRead] = True")
+    
+    lista_mensajes = list(mensajes)
+    print(f"Correos pendientes con adjuntos: {len(lista_mensajes)}")
+    
+    if not lista_mensajes:
+        print("Nada nuevo por aquí.")
+        return
+
+    datos_recolectados = []
+    mensajes_para_marcar = []
+
+    # Iniciamos Excel una sola vez
+    try:
+        app_excel = win32com.client.Dispatch("Excel.Application")
+        app_excel.Visible = False
+        app_excel.DisplayAlerts = False
+    except:
+        print("Error al iniciar Excel.")
+        return
+
+    # 3. ITERAR CORREOS
+    for i, mensaje in enumerate(lista_mensajes):
+        try:
+            print(f"Analizando correo {i+1}/{len(lista_mensajes)} ({mensaje.ReceivedTime})...")
+            
+            # --- CAPTURA DE DATOS DE TIEMPO ---
+            fecha_obj = mensaje.ReceivedTime
+            fecha_str = fecha_obj.strftime("%d/%m/%Y")
+            hora_str = fecha_obj.strftime("%H:%M:%S")
+            # Dato fantasma para ordenamiento exacto
+            fecha_raw = pd.to_datetime(str(fecha_obj)).replace(tzinfo=None)
+
+            attachments = mensaje.Attachments
+            adjunto_objetivo = None
+            
+            # Buscar el adjunto
+            for att in attachments:
+                nombre = att.FileName.lower()
+                if "dashboard_fraude" in nombre and ".xls" in nombre:
+                    adjunto_objetivo = att
+                    break
+            
+            if adjunto_objetivo:
+                print(f"  > Procesando adjunto: {adjunto_objetivo.FileName}")
+                ruta_temp = os.path.join(ruta_actual, adjunto_objetivo.FileName)
+                adjunto_objetivo.SaveAsFile(ruta_temp)
+                
+                datos_encontrados_en_este_correo = False
+
+                try:
+                    wb = app_excel.Workbooks.Open(ruta_temp)
+                    try:
+                        ws = wb.Sheets("Resumen por comercios")
+                    except:
+                        ws = wb.Sheets(1)
+                        print("  > Aviso: Usando la primera hoja disponible.")
+
+                    datos_hoja = ws.UsedRange.Value
+                    
+                    # Lógica de búsqueda de columnas (Tu lógica original, mantenida)
+                    fila_encabezado = -1
+                    indices_columnas_comercio = []
+                    
+                    if datos_hoja: # Verificación simple de que no esté vacío
+                        # Buscar encabezado en primeras 20 filas
+                        for idx_fila, fila in enumerate(datos_hoja[:20]):
+                            for idx_col, celda in enumerate(fila):
+                                if celda and isinstance(celda, str) and "NOMBRE COMERCIO" in celda.upper():
+                                    fila_encabezado = idx_fila
+                                    indices_columnas_comercio.append(idx_col)
+                    
+                        if fila_encabezado != -1 and indices_columnas_comercio:
+                            # Extraer datos
+                            for fila_datos in datos_hoja[fila_encabezado+1:]:
+                                for col_idx in indices_columnas_comercio:
+                                    if len(fila_datos) > col_idx:
+                                        valor = fila_datos[col_idx]
+                                        
+                                        if valor and str(valor).strip() != "":
+                                            if "TOTAL" in str(valor).upper(): continue
+                                            
+                                            # --- AQUÍ APLICAMOS LA ESTRUCTURA PATRÓN ---
+                                            datos_recolectados.append({
+                                                "Fecha": fecha_str,
+                                                "Hora": hora_str,
+                                                "Archivo_Origen": adjunto_objetivo.FileName,
+                                                "Nombre_Comercio": str(valor).strip(),
+                                                "_orden_fantasma": fecha_raw # <--- LA CLAVE
+                                            })
+                                            datos_encontrados_en_este_correo = True
+                        else:
+                            print("  > No se encontró columna 'NOMBRE COMERCIO'.")
+                    
+                    wb.Close(False)
+
+                except Exception as e:
+                    print(f"  > Error leyendo Excel interno: {e}")
+                    if 'wb' in locals(): wb.Close(False)
+
+                # Limpieza temp
+                try: os.remove(ruta_temp)
+                except: pass
+                
+                if datos_encontrados_en_este_correo:
+                    mensajes_para_marcar.append(mensaje)
+
+        except Exception as e:
+            print(f"Error general en correo {i+1}: {e}")
+
+    app_excel.Quit()
+
+    # 4. GUARDADO Y ORDENAMIENTO INTELIGENTE
+    if datos_recolectados:
+        df_nuevo = pd.DataFrame(datos_recolectados)
+        
+        if os.path.exists(archivo_final):
+            try:
+                df_antiguo = pd.read_excel(archivo_final)
+                # Reconstruir fantasma para históricos
+                df_antiguo["_orden_fantasma"] = pd.to_datetime(
+                    df_antiguo["Fecha"].astype(str) + " " + df_antiguo["Hora"].astype(str),
+                    dayfirst=True, errors='coerce'
+                )
+                df_final = pd.concat([df_antiguo, df_nuevo], ignore_index=True)
+            except:
+                df_final = df_nuevo
+        else:
+            df_final = df_nuevo
+            
+        print("Ordenando datos...")
+        # Ordenamiento ESTABLE (Testeo antes de Afectación, o Fila 1 antes de Fila 2)
+        df_final = df_final.sort_values(by="_orden_fantasma", ascending=True, kind='mergesort')
+        
+        # Eliminar columna fantasma y seleccionar columnas finales
+        df_final_guardar = df_final.drop(columns=["_orden_fantasma"])
+        columnas_orden = ["Fecha", "Hora", "Archivo_Origen", "Nombre_Comercio"]
+        # Filtramos para asegurar orden visual
+        df_final_guardar = df_final_guardar[columnas_orden]
+
+        try:
+            df_final_guardar.to_excel(archivo_final, index=False)
+            print(f"✅ ¡ÉXITO! Se guardaron {len(datos_recolectados)} nuevos registros.")
+            
+            # 5. MARCAR COMO LEÍDOS (Solo al final)
+            print("Actualizando estado de correos...")
+            for m in mensajes_para_marcar:
+                try:
+                    m.UnRead = False
+                    m.Save()
+                except: pass
+            print("Proceso completado.")
+
+        except PermissionError:
+            print("❌ ERROR: El Excel sigue abierto. No se guardó nada.")
+    else:
+        print("No se encontraron datos válidos en los adjuntos.")
+
+if __name__ == "__main__":
+    procesar_adjuntos_fraude_v2()
