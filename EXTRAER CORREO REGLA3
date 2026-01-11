@@ -1,0 +1,144 @@
+import win32com.client
+import pandas as pd
+import re
+import os
+import datetime
+
+def limpiar_texto(texto_sucio):
+    """Limpia el HTML para dejar solo texto legible."""
+    if not texto_sucio: return ""
+    texto = texto_sucio.replace('<br>', '\n').replace('</div>', '\n').replace('</p>', '\n')
+    texto_limpio = re.sub(r'<[^>]+>', '', texto)
+    return texto_limpio.replace('&nbsp;', ' ').replace('&amp;', '&').strip()
+
+def verificar_excel_cerrado(ruta_excel):
+    """Pilar 1: Seguridad de Archivo"""
+    if os.path.exists(ruta_excel):
+        try:
+            with open(ruta_excel, "a"): pass
+        except PermissionError: return False
+    return True
+
+def procesar_correos_monitor_v4():
+    print("--- INICIANDO AUTOMATIZACIÓN 3: COMERCIOS MONITOR (ESTÁNDAR UNIFICADO) ---")
+    
+    archivo_excel = "Base_Monitor_Fraudes.xlsx"
+    
+    # 1. SEGURIDAD DE ARCHIVO
+    if not verificar_excel_cerrado(archivo_excel):
+        print("❌ ERROR CRÍTICO: El Excel está abierto. Ciérralo y vuelve a ejecutar.")
+        return
+
+    # 2. CONEXIÓN OUTLOOK
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        inbox = outlook.GetDefaultFolder(6) 
+        carpeta_monitor = inbox.Folders("comercio_tres_fraudes") 
+    except Exception as e:
+        print("Error: No se encuentra la carpeta 'comercio_tres_fraudes'.")
+        return
+
+    # --- ORDENAMIENTO DE LECTURA (Viejo -> Nuevo) ---
+    items = carpeta_monitor.Items
+    items.Sort("[ReceivedTime]", False) 
+    mensajes_filtrados = items.Restrict("[UnRead] = True")
+    
+    lista_mensajes = list(mensajes_filtrados)
+    cantidad = len(lista_mensajes)
+    print(f"Correos pendientes encontrados: {cantidad}")
+
+    if cantidad == 0:
+        print("No hay nada nuevo.")
+        return
+
+    lista_datos = []
+    mensajes_para_marcar = []
+
+    # 3. PROCESAR CADA CORREO
+    for i, mensaje in enumerate(lista_mensajes):
+        try:
+            print(f"Procesando correo {i+1}/{cantidad}...")
+            
+            # --- DATOS DE FECHA/HORA + FANTASMA ---
+            fecha_obj = mensaje.ReceivedTime
+            fecha_str = fecha_obj.strftime("%d/%m/%Y")
+            hora_str = fecha_obj.strftime("%H:%M:%S")
+            fecha_raw = pd.to_datetime(str(fecha_obj)).replace(tzinfo=None) # Fantasma
+
+            # Limpieza y Extracción
+            cuerpo_texto = limpiar_texto(mensaje.HTMLBody)
+            
+            # Regex (Tu lógica original)
+            match_nombre = re.search(r"Nombre de Comercio\s*[:]\s*(.*)", cuerpo_texto, re.IGNORECASE)
+            nombre = match_nombre.group(1).strip() if match_nombre else "No encontrado"
+            
+            match_codigo = re.search(r"Código comercio\s*[:]\s*(\d+)", cuerpo_texto, re.IGNORECASE)
+            codigo = match_codigo.group(1).strip() if match_codigo else "No encontrado"
+            
+            match_fecha = re.search(r"Fecha trx original\s*[:]\s*(\d+)", cuerpo_texto, re.IGNORECASE)
+            fecha_trx = match_fecha.group(1).strip() if match_fecha else "No encontrado"
+
+            if nombre != "No encontrado":
+                lista_datos.append({
+                    "Fecha": fecha_str,
+                    "Hora": hora_str,
+                    "Nombre_Comercio": nombre,
+                    "Codigo_Comercio": codigo,
+                    "Fecha_Trx_Original": fecha_trx,
+                    "_orden_fantasma": fecha_raw # <--- Pilar 3: Orden Fantasma
+                })
+                print(f"  > Extraído: {nombre}")
+                mensajes_para_marcar.append(mensaje) # Pilar 2: Guardamos para marcar luego
+            else:
+                print("  > No se encontraron patrones válidos en este correo.")
+
+        except Exception as e:
+            print(f"Error en un correo: {e}")
+
+    # 4. GUARDAR Y ORDENAR
+    if lista_datos:
+        df_nuevo = pd.DataFrame(lista_datos)
+        
+        if os.path.exists(archivo_excel):
+            try:
+                df_antiguo = pd.read_excel(archivo_excel)
+                # Reconstrucción Fantasma para históricos
+                df_antiguo["_orden_fantasma"] = pd.to_datetime(
+                    df_antiguo["Fecha"].astype(str) + " " + df_antiguo["Hora"].astype(str),
+                    dayfirst=True, errors='coerce'
+                )
+                df_final = pd.concat([df_antiguo, df_nuevo], ignore_index=True)
+            except:
+                df_final = df_nuevo
+        else:
+            df_final = df_nuevo
+            
+        print("Ordenando datos cronológicamente...")
+        # Orden Estable
+        df_final = df_final.sort_values(by="_orden_fantasma", ascending=True, kind='mergesort')
+        
+        # Limpieza Final
+        df_final_guardar = df_final.drop(columns=["_orden_fantasma"])
+        columnas_orden = ["Fecha", "Hora", "Nombre_Comercio", "Codigo_Comercio", "Fecha_Trx_Original"]
+        # Nos aseguramos de que existan las columnas antes de filtrar
+        columnas_existentes = [c for c in columnas_orden if c in df_final_guardar.columns]
+        df_final_guardar = df_final_guardar[columnas_existentes]
+
+        try:
+            df_final_guardar.to_excel(archivo_excel, index=False)
+            print(f"✅ ¡ÉXITO! Se guardaron {len(lista_datos)} registros.")
+            
+            # --- Pilar 2: Transaccionalidad (Solo ahora marcamos) ---
+            print("Actualizando estado de correos...")
+            for m in mensajes_para_marcar:
+                try: m.UnRead = False; m.Save()
+                except: pass
+            print("Proceso finalizado.")
+            
+        except PermissionError:
+            print("❌ ERROR: El Excel sigue abierto. No se guardaron cambios.")
+    else:
+        print("No se extrajeron datos nuevos.")
+
+if __name__ == "__main__":
+    procesar_correos_monitor_v4()
