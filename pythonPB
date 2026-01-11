@@ -94,3 +94,33 @@ prediccion = clf.fit_predict(datos_modelo)
 dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
 
 # El resultado final se devuelve a Power BI
+
+
+000000000000000000000)))))))))))))))
+# --- CONFIGURACIÓN ---
+# Aquí ponemos el nombre EXACTO que me acabas de dar.
+columna_monto = "acf_monto_moneda_local"
+columna_hora = "horas y minutos de la transacción"
+
+# ---------------------
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+
+# 1. Limpiamos el MONTO
+dataset['Monto_Limpio'] = pd.to_numeric(dataset[columna_monto], errors='coerce').fillna(0)
+
+# 2. Procesamos la HORA (Usando tu columna nueva de 0-24)
+# La convertimos a texto primero para asegurar que Python la lea bien
+dataset['Hora_Temp'] = pd.to_datetime(dataset[columna_hora].astype(str), errors='coerce')
+# Extraemos solo la hora (0, 1, 2... 23)
+dataset['Hora_Simple_Py'] = dataset['Hora_Temp'].dt.hour.fillna(0)
+
+# 3. Preparamos datos para la IA
+datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
+
+# 4. Ejecutamos el algoritmo (Buscando el 2% más raro)
+clf = IsolationForest(contamination=0.02, random_state=42)
+prediccion = clf.fit_predict(datos_modelo)
+
+# 5. Guardamos el resultado (-1 = Fraude/Anomalía, 1 = Normal)
+dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
