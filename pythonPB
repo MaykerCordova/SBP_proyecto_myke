@@ -1,126 +1,31 @@
-# El dataset ya viene cargado automáticamente como 'dataset'
+# 'dataset' ya viene cargado.
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
-# 1. Seleccionamos las columnas numéricas para el análisis
-# Usamos MONTO y HORA (que son clave para ver ataques de robots)
-# Asegúrate de que los nombres de las columnas sean IGUALES a los tuyos
-datos_modelo = dataset[['acf_monto_moneda_local', 'Hora_Simple']].fillna(0)
+# 1. Definimos tus columnas (Tal cual las tienes en tu código exitoso)
+col_monto = 'ACF-MONTO EN MONEDA LOCAL'
+col_hora = 'ACF-HORA SIN MINUTOS DE LA TRX'
 
-# 2. Convertimos el ENTRY MODE a número (porque a los robots les gusta el E-commerce)
-# Si no tienes esta columna, borra estas 3 líneas siguientes
-if 'acf_entry_mode' in dataset.columns:
-    # Convertimos texto a códigos numéricos rápidos
-    datos_modelo['entry_mode_cod'] = dataset['acf_entry_mode'].astype('category').cat.codes
+# 2. LIMPIEZA BLINDADA (Aquí está la magia)
+# Convertimos a string primero para asegurar, reemplazamos coma por punto (por si acaso) y luego a número.
+dataset['Monto_Limpio'] = (dataset[col_monto].astype(str)
+                           .str.replace(',', '.', regex=False)  # Parche para formato latino
+                           .apply(pd.to_numeric, errors='coerce')
+                           .fillna(0))
 
-# 3. EL ALGORITMO (Isolation Forest)
-# contamination=0.02 significa que buscamos el 2% más raro (aprox 1200 casos de tus 60k)
-clf = IsolationForest(contamination=0.02, random_state=42)
+# Limpieza de Hora (Aseguramos que sea entero)
+dataset['Hora_Num'] = pd.to_numeric(dataset[col_hora], errors='coerce').fillna(-1)
 
-# 4. Predecimos
-# -1 es Anomalía, 1 es Normal
-prediccion = clf.fit_predict(datos_modelo)
+# 3. Preparamos los datos
+# Filtramos solo lo que tenga sentido (monto y hora válidos)
+datos_modelo = dataset[['Monto_Limpio', 'Hora_Num']].astype(float)
 
-# 5. Guardamos el resultado en tu tabla original
-dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
-dataset['Score_Rareza'] = clf.decision_function(datos_modelo) 
-
-# Power BI tomará el 'dataset' modificado
-$$$$$$$$$$
-
-
-# El dataset ya viene cargado automáticamente
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-
-# 1. LIMPIEZA DE DATOS (Vital)
-# Convertimos el MONTO a número. Si hay errores, pone 0.
-# CONFIRMA que tu columna se llame exactamente 'acf_monto_moneda_local'
-dataset['Monto_Limpio'] = pd.to_numeric(dataset['acf_monto_moneda_local'], errors='coerce').fillna(0)
-
-# 2. CREAMOS LA HORA SIMPLE DENTRO DE PYTHON
-# Usamos tu columna 'ACF-HORA TRX'. La convertimos a fecha y sacamos solo la HORA (0-23).
-# Si tu columna se llama diferente (ej. 'hf ahora TRX'), cambia el nombre aquí abajo:
-dataset['Hora_Convertida'] = pd.to_datetime(dataset['ACF-HORA TRX'].astype(str), errors='coerce')
-dataset['Hora_Simple_Py'] = dataset['Hora_Convertida'].dt.hour.fillna(0) 
-
-# 3. SELECCIONAMOS DATOS PARA EL CEREBRO (IA)
-# Usamos el Monto y la Hora (número) que acabamos de crear
-datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
-
-# 4. EL ALGORITMO (Detectando el ataque)
-# contamination=0.02 busca el 2% más raro
+# 4. El Cerebro (Isolation Forest)
+# contamination=0.02 es el 2% más raro
 clf = IsolationForest(contamination=0.02, random_state=42)
 prediccion = clf.fit_predict(datos_modelo)
 
-# 5. GUARDAMOS RESULTADO
-# -1 es Anomalía (SI), 1 es Normal (NO)
+# 5. Resultado
 dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
 
-# Power BI mostrará el dataset final con la nueva columna 'Es_Anomalia_IA'
-
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%
-
-# --- CONFIGURACIÓN (SOLO TOCA AQUÍ) ---
-# Escribe EXACTAMENTE el nombre de tus columnas tal cual salen en Power BI
-columna_monto = "acf_monto_moneda_local"  # Tu columna de dinero
-columna_hora = "ACF-HORA TRX"             # Tu columna de hora (ej. 12:00:05 a.m.)
-
-# ---------------------------------------
-# EL CÓDIGO (NO TOCAR NADA ABAJO)
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-
-# 1. Limpiamos el MONTO (Lo forzamos a ser número)
-# 'coerce' significa: si encuentra texto basura, lo convierte en NaN (vacío) y luego en 0
-dataset['Monto_Limpio'] = pd.to_numeric(dataset[columna_monto], errors='coerce').fillna(0)
-
-# 2. Convertimos la HORA a número (0 a 23)
-# Forzamos que se lea como string primero para evitar errores de formato
-dataset['Hora_Temp'] = pd.to_datetime(dataset[columna_hora].astype(str), errors='coerce')
-dataset['Hora_Simple_Py'] = dataset['Hora_Temp'].dt.hour.fillna(0) 
-
-# 3. Preparamos los datos para la IA
-datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
-
-# 4. Ejecutamos el algoritmo 'Isolation Forest'
-# contamination=0.02 detecta el 2% más raro
-clf = IsolationForest(contamination=0.02, random_state=42)
-prediccion = clf.fit_predict(datos_modelo)
-
-# 5. Guardamos el resultado (-1 es anomalía, 1 es normal)
-dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
-
-# El resultado final se devuelve a Power BI
-
-
-000000000000000000000)))))))))))))))
-# --- CONFIGURACIÓN ---
-# Aquí ponemos el nombre EXACTO que me acabas de dar.
-columna_monto = "acf_monto_moneda_local"
-columna_hora = "horas y minutos de la transacción"
-
-# ---------------------
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-
-# 1. Limpiamos el MONTO
-dataset['Monto_Limpio'] = pd.to_numeric(dataset[columna_monto], errors='coerce').fillna(0)
-
-# 2. Procesamos la HORA (Usando tu columna nueva de 0-24)
-# La convertimos a texto primero para asegurar que Python la lea bien
-dataset['Hora_Temp'] = pd.to_datetime(dataset[columna_hora].astype(str), errors='coerce')
-# Extraemos solo la hora (0, 1, 2... 23)
-dataset['Hora_Simple_Py'] = dataset['Hora_Temp'].dt.hour.fillna(0)
-
-# 3. Preparamos datos para la IA
-datos_modelo = dataset[['Monto_Limpio', 'Hora_Simple_Py']]
-
-# 4. Ejecutamos el algoritmo (Buscando el 2% más raro)
-clf = IsolationForest(contamination=0.02, random_state=42)
-prediccion = clf.fit_predict(datos_modelo)
-
-# 5. Guardamos el resultado (-1 = Fraude/Anomalía, 1 = Normal)
-dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
+# Power BI tomará este 'dataset' final.
