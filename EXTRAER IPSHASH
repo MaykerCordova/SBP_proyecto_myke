@@ -5,9 +5,9 @@ import os
 import datetime
 
 # --- CONFIGURACIÓN DE USUARIO ---
-# TRUE = Guarda los Wallet IDs como si fueran Hashes (porque se parecen).
-# FALSE = Si el correo dice "Wallet ID", ignora los códigos encontrados en ese correo.
-INCLUIR_WALLET_IDS = True 
+# TRUE = Guarda TODO (Hashes, IPs y Wallets mezclados).
+# FALSE = Si encuentra la palabra "Wallet ID", CORTA el análisis ahí para no guardar lo que siga.
+INCLUIR_WALLET_IDS = False 
 
 def limpiar_html_a_texto(html_sucio):
     """Limpia el HTML para dejar solo texto legible."""
@@ -18,19 +18,19 @@ def limpiar_html_a_texto(html_sucio):
     return re.sub(' +', ' ', texto_final).strip()
 
 def verificar_excel_cerrado(ruta_excel):
-    """Pilar 1: Seguridad de Archivo - Verifica si se puede escribir."""
+    """Pilar 1: Seguridad de Archivo."""
     if os.path.exists(ruta_excel):
         try:
             with open(ruta_excel, "a"): pass
         except PermissionError: return False
     return True
 
-def procesar_correos_ips_hashes_final():
+def procesar_correos_ips_hashes_v3():
     print(f"--- INICIANDO EXTRACCIÓN (Mode Wallet ID: {'INCLUIDO' if INCLUIR_WALLET_IDS else 'EXCLUIDO'}) ---")
     
     archivo_excel = "Base_IPs_Hashes.xlsx"
     
-    # 1. SEGURIDAD DE ARCHIVO (Pilar 1)
+    # 1. SEGURIDAD DE ARCHIVO
     if not verificar_excel_cerrado(archivo_excel):
         print("❌ ERROR CRÍTICO: El Excel está abierto. Ciérralo y vuelve a ejecutar.")
         return
@@ -39,15 +39,14 @@ def procesar_correos_ips_hashes_final():
     try:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
         inbox = outlook.GetDefaultFolder(6)
-        # Asegúrate de que el nombre de la carpeta sea exacto
         carpeta_destino = inbox.Folders("ips_Hash") 
     except Exception as e:
         print("Error: No se encuentra la carpeta 'ips_Hash'. Verifica el nombre.")
         return
 
-    # --- ORDENAMIENTO DE LECTURA (Del más antiguo al más nuevo) ---
+    # --- ORDENAMIENTO (Viejo -> Nuevo) ---
     items = carpeta_destino.Items
-    items.Sort("[ReceivedTime]", False) # False = Ascendente (Viejo -> Nuevo)
+    items.Sort("[ReceivedTime]", False) 
     mensajes_filtrados = items.Restrict("[UnRead] = True")
     
     lista_mensajes = list(mensajes_filtrados)
@@ -58,49 +57,52 @@ def procesar_correos_ips_hashes_final():
         print("No hay nada pendiente.")
         return
 
-    # Listas para almacenar resultados
     todos_los_hashes_nuevos = []
     todos_los_ips_nuevos = []
-    mensajes_para_marcar = [] # Para el Pilar 2 (Transaccionalidad)
+    mensajes_para_marcar = []
 
-    # Regex
+    # --- REGEX MEJORADO (Tu solicitud) ---
     regex_ip = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    regex_hash = r'\b[a-fA-F0-9]{16,}\b' # Captura Hashes y Wallet IDs
+    
+    # Explicación Regex Hash:
+    # Opción 1: [a-fA-F0-9]{16,}  -> Hexadecimal continuo largo (ej. d9ae64...)
+    # Opción 2: [a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12} -> Formato GUID con guiones (ej. 55B9CA70-...)
+    regex_hash = r'\b(?:[a-fA-F0-9]{16,}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})\b'
 
     # 3. PROCESAR CADA CORREO
     for i, mensaje in enumerate(lista_mensajes):
         try:
             print(f"Procesando correo {i+1}/{cantidad}...")
             
-            # Datos de tiempo + Dato Fantasma (Pilar 3)
             fecha_obj = mensaje.ReceivedTime
             fecha_str = fecha_obj.strftime("%d/%m/%Y")
             hora_str = fecha_obj.strftime("%H:%M:%S")
-            fecha_raw = pd.to_datetime(str(fecha_obj)).replace(tzinfo=None)
+            fecha_raw = pd.to_datetime(str(fecha_obj)).replace(tzinfo=None) # Pilar 3
 
             texto_cuerpo = limpiar_html_a_texto(mensaje.HTMLBody)
             
-            # Búsqueda de patrones
+            # --- LA LÓGICA DE LA "TIJERA" ---
+            # Si el usuario NO quiere Wallets, cortamos el texto donde empiece la sección de Wallets.
+            if not INCLUIR_WALLET_IDS:
+                # Buscamos "Wallet ID" (o variaciones comunes) ignorando mayúsculas
+                match_wallet = re.search(r"WALLET ID", texto_cuerpo, re.IGNORECASE)
+                if match_wallet:
+                    # CORTAMOS EL TEXTO: Nos quedamos solo con lo que está ANTES de "Wallet ID"
+                    posicion_corte = match_wallet.start()
+                    print(f"  > Se detectó sección Wallet ID. Cortando texto para ignorarla...")
+                    texto_cuerpo = texto_cuerpo[:posicion_corte]
+                    # Ahora 'texto_cuerpo' ya no tiene la parte del Wallet, pero SÍ tiene la de Hash/IP
+
+            # Búsqueda de patrones (Ahora segura)
             hashes_encontrados = re.findall(regex_hash, texto_cuerpo)
             ips_encontradas = re.findall(regex_ip, texto_cuerpo)
             
             encontrado_algo = False
 
-            # --- LÓGICA DE FILTRO DE WALLET ID ---
-            # Detectamos si el correo menciona explícitamente "Wallet ID"
-            es_correo_wallet = "WALLET ID" in texto_cuerpo.upper()
-
             # Procesar Hashes
             for h in hashes_encontrados:
-                # Filtro de ejemplo (el hash que se repite siempre)
-                if "1e2932eb0f962f6e" in h: continue
+                if "1e2932eb0f962f6e" in h: continue # Tu filtro de ejemplo
                 
-                # OPCIÓN DE EXCLUSIÓN:
-                if not INCLUIR_WALLET_IDS and es_correo_wallet:
-                    # Si el usuario NO quiere Wallets y el correo es de Wallet, saltamos
-                    print(f"  > Ignorando posible Wallet ID: {h[:10]}...")
-                    continue
-
                 todos_los_hashes_nuevos.append({
                     "Fecha": fecha_str,
                     "Hora": hora_str,
@@ -111,9 +113,7 @@ def procesar_correos_ips_hashes_final():
                 
             # Procesar IPs
             for ip in ips_encontradas:
-                 # Filtros de IPs locales o basura
                  if ip.startswith("127.0") or ip.startswith("10."): continue
-                 
                  todos_los_ips_nuevos.append({
                      "Fecha": fecha_str,
                      "Hora": hora_str,
@@ -122,8 +122,8 @@ def procesar_correos_ips_hashes_final():
                  })
                  encontrado_algo = True
 
-            # Si encontramos datos válidos (o si el correo estaba vacío de datos pero era válido)
-            # lo agregamos a la lista para marcar como leído AL FINAL
+            # Si encontramos datos O si era un correo válido (aunque vacío de datos útiles)
+            # lo marcamos para que no se atasque en la bandeja
             if encontrado_algo or (not hashes_encontrados and not ips_encontradas):
                 mensajes_para_marcar.append(mensaje)
 
@@ -131,90 +131,67 @@ def procesar_correos_ips_hashes_final():
             print(f"Error en correo {i+1}: {e}")
             continue
 
-    # 4. GUARDAR Y ORDENAR (LÓGICA BLINDADA - PRESERVA HOJAS)
-    print("Preparando para guardar...")
-    
-    # Convertimos a DataFrame
+    # 4. GUARDAR Y ORDENAR (LÓGICA BLINDADA)
     df_hashes_nuevos = pd.DataFrame(todos_los_hashes_nuevos)
     df_ips_nuevos = pd.DataFrame(todos_los_ips_nuevos)
 
-    # Si no hay NADA nuevo de NADA, terminamos
     if df_hashes_nuevos.empty and df_ips_nuevos.empty:
-        print("No se encontraron datos válidos nuevos para guardar.")
-        # Opcional: Marcar correos como leídos si ya se procesaron aunque no tuvieran datos
+        print("No se encontraron datos nuevos.")
+        # Opcional: Descomentar si quieres limpiar la bandeja incluso si no hubo datos
         # for m in mensajes_para_marcar: m.UnRead = False; m.Save()
         return
 
     try:
-        # --- FASE A: CARGAR HISTÓRICO A MEMORIA ---
-        # Cargamos AMBAS hojas antes de abrir el Excel en modo escritura
+        # FASE DE CARGA (Preservar histórico)
         df_hashes_final = pd.DataFrame()
         df_ips_final = pd.DataFrame()
         
-        # Helper para ordenar con fantasma
         def ordenar_con_fantasma(df):
             if not df.empty and "_orden_fantasma" in df.columns:
-                # Reparar fantasma en datos viejos si falta
                 mask = df["_orden_fantasma"].isna()
                 if mask.any():
                     df.loc[mask, "_orden_fantasma"] = pd.to_datetime(
                         df.loc[mask, "Fecha"].astype(str) + " " + df.loc[mask, "Hora"].astype(str),
                         dayfirst=True, errors='coerce'
                     )
-                # Orden MergeSort (Estable)
                 df = df.sort_values(by="_orden_fantasma", ascending=True, kind='mergesort')
                 return df.drop(columns=["_orden_fantasma"])
             return df
 
         if os.path.exists(archivo_excel):
-            try:
-                # Intentamos leer Hashes viejos
-                df_hashes_antiguos = pd.read_excel(archivo_excel, sheet_name='Hashes')
-                df_hashes_final = df_hashes_antiguos
+            try: df_hashes_final = pd.read_excel(archivo_excel, sheet_name='Hashes')
+            except: pass 
+            try: df_ips_final = pd.read_excel(archivo_excel, sheet_name='IPs')
             except: pass 
 
-            try:
-                # Intentamos leer IPs viejas
-                df_ips_antiguos = pd.read_excel(archivo_excel, sheet_name='IPs')
-                df_ips_final = df_ips_antiguos
-            except: pass 
-
-        # --- FASE B: COMBINAR ---
         if not df_hashes_nuevos.empty:
             df_hashes_final = pd.concat([df_hashes_final, df_hashes_nuevos], ignore_index=True)
-        
         if not df_ips_nuevos.empty:
             df_ips_final = pd.concat([df_ips_final, df_ips_nuevos], ignore_index=True)
 
-        # --- FASE C: ORDENAR ---
         df_hashes_final = ordenar_con_fantasma(df_hashes_final)
         df_ips_final = ordenar_con_fantasma(df_ips_final)
 
-        # --- FASE D: GUARDAR TODO ---
+        # GUARDAR
+        print("Guardando Excel...")
         with pd.ExcelWriter(archivo_excel, engine='openpyxl', mode='w') as writer:
             if not df_hashes_final.empty:
                 df_hashes_final.to_excel(writer, sheet_name='Hashes', index=False)
-            
             if not df_ips_final.empty:
                 df_ips_final.to_excel(writer, sheet_name='IPs', index=False)
 
-        print(f"✅ ¡ÉXITO! Base actualizada: {archivo_excel}")
-        print(f"   > Total Hashes: {len(df_hashes_final)}")
-        print(f"   > Total IPs: {len(df_ips_final)}")
-
-        # --- FASE E: TRANSACCIONALIDAD (Pilar 2) ---
-        print("Actualizando estado de correos a LEÍDO...")
+        print(f"✅ ¡ÉXITO! Base actualizada.")
+        
+        # FASE DE TRANSACCIONALIDAD (Pilar 2)
+        print("Actualizando correos a LEÍDO...")
         for m in mensajes_para_marcar:
-            try:
-                m.UnRead = False
-                m.Save()
+            try: m.UnRead = False; m.Save()
             except: pass
-        print("Proceso finalizado correctamente.")
-
+            
     except PermissionError:
         print("❌ ERROR: El Excel sigue abierto. Ciérralo y reintenta.")
     except Exception as e:
         print(f"Error guardando Excel: {e}")
 
 if __name__ == "__main__":
-    procesar_correos_ips_hashes_final()
+    procesar_correos_ips_hashes_v3()
