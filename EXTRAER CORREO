@@ -1,0 +1,181 @@
+import win32com.client
+import pandas as pd
+import re
+import os
+import datetime
+
+def limpiar_html(texto_sucio):
+    """Limpia etiquetas HTML básicas y espacios extra."""
+    if not texto_sucio: return ""
+    # Reemplazos de entidades HTML comunes
+    texto = texto_sucio.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&gt;', '>').replace('&lt;', '<')
+    # Eliminar cualquier etiqueta HTML residual dentro de la celda
+    texto_limpio = re.sub(r'<[^>]+>', '', texto)
+    return texto_limpio.replace('\r', '').replace('\n', '').strip()
+
+def detectar_tipo_tabla(texto_previo):
+    """
+    Analiza el texto que está antes de la tabla para decidir si es TESTEO o AFECTACION.
+    Busca la palabra clave más cercana al final del texto previo.
+    """
+    if not texto_previo:
+        return "NORMAL"
+    
+    # Convertimos a mayúsculas para buscar sin importar cómo lo escriban
+    texto_upper = texto_previo.upper()
+    
+    # Buscamos la última aparición de las palabras clave (la más cercana a la tabla)
+    idx_testeo = texto_upper.rfind("TESTEO")
+    idx_afectacion = texto_upper.rfind("AFECTACION")
+    if idx_afectacion == -1: # Intento con tilde por si acaso
+        idx_afectacion = texto_upper.rfind("AFECTACIÓN")
+
+    # Lógica de decisión:
+    # Si no encuentra nada, es NORMAL
+    if idx_testeo == -1 and idx_afectacion == -1:
+        return "NORMAL"
+    
+    # Si encuentra ambos, nos quedamos con el que esté más "abajo" (mayor índice)
+    # es decir, el que esté más cerca de la tabla que estamos leyendo.
+    if idx_testeo > idx_afectacion:
+        return "TESTEO"
+    else:
+        return "AFECTACION"
+
+def procesar_correos_bancarios_v5():
+    print("--- INICIANDO ESCANEO DE CORREOS (VERSIÓN 5 - CON TIPOS) ---")
+    
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        inbox = outlook.GetDefaultFolder(6) 
+        carpeta_destino = inbox.Folders("deteccion") 
+    except Exception as e:
+        print("Error: No se pudo conectar a la carpeta 'deteccion'. Verifica que exista.")
+        return
+
+    # 1. OBTENER CORREOS
+    items = carpeta_destino.Items
+    items.Sort("[ReceivedTime]", True)
+    mensajes_filtrados = items.Restrict("[UnRead] = True")
+    
+    lista_mensajes = list(mensajes_filtrados)
+    cantidad = len(lista_mensajes)
+    print(f"Total de correos NO LEÍDOS detectados: {cantidad}")
+
+    if cantidad == 0:
+        print("No hay nada pendiente.")
+        return
+
+    lista_datos = []
+
+    # 2. PROCESAR CADA CORREO
+    for i, mensaje in enumerate(lista_mensajes):
+        try:
+            print(f"Procesando correo {i+1}/{cantidad}...")
+            
+            html_body = mensaje.HTMLBody
+            
+            # --- NUEVA LÓGICA DE FECHA Y HORA ---
+            # ReceivedTime suele ser un objeto datetime de pywin32
+            fecha_obj = mensaje.ReceivedTime
+            fecha_str = fecha_obj.strftime("%d/%m/%Y") # Día/Mes/Año
+            hora_str = fecha_obj.strftime("%H:%M:%S")  # Hora:Minuto:Segundo
+
+            # --- NUEVA ESTRATEGIA DE EXTRACCIÓN POR TABLAS ---
+            # Dividimos el HTML buscando las etiquetas de inicio de tabla <table...
+            # Usamos split con captura de paréntesis para no perder contenido, 
+            # pero mejor usamos re.split para identificar bloques.
+            
+            # Buscamos todas las tablas completas en el HTML
+            # Explicación regex: Busca <table (lo que sea) > (contenido) </table>
+            tablas_encontradas = list(re.finditer(r'<table[^>]*>(.*?)</table>', html_body, re.IGNORECASE | re.DOTALL))
+
+            datos_encontrados_en_correo = False
+
+            for match_tabla in tablas_encontradas:
+                start_index = match_tabla.start()
+                contenido_tabla = match_tabla.group(1) # El contenido dentro de la tabla
+                
+                # Texto que hay DESDE el inicio del correo HASTA el inicio de esta tabla
+                texto_previo = html_body[:start_index]
+                
+                # Determinamos el TIPO basado en el texto previo
+                tipo_detectado = detectar_tipo_tabla(texto_previo)
+
+                # Ahora procesamos las filas SOLO de esta tabla
+                filas = re.split(r'</tr>', contenido_tabla, flags=re.IGNORECASE)
+
+                for fila in filas:
+                    celdas = re.findall(r'<td[^>]*>(.*?)</td>', fila, re.IGNORECASE | re.DOTALL)
+                    
+                    if len(celdas) < 2: continue
+                    
+                    columna_0 = limpiar_html(celdas[0]) # Nombre Comercio
+                    columna_1 = limpiar_html(celdas[1]) # Cod Comercio / BIN
+                    
+                    # --- FILTROS DE LIMPIEZA (Headers) ---
+                    if not columna_0: continue
+                    if "NOMBRE COMERCIO" in columna_0.upper() or "Q TRX" in columna_0.upper(): continue
+                    if "COD" in columna_1.upper() and "COMERCIO" in columna_1.upper(): continue
+                    if "ENTRY" in columna_1.upper(): continue
+                    # Filtro extra por si captura filas de totales o pies de página raros
+                    if "TOTAL" in columna_0.upper(): continue
+
+                    # Guardar dato con la nueva estructura
+                    lista_datos.append({
+                        "Fecha": fecha_str,
+                        "Hora": hora_str,
+                        "Tipo": tipo_detectado, # TESTEO, AFECTACION o NORMAL
+                        "Nombre_Comercio": columna_0,
+                        "Codigo_Comercio": columna_1
+                    })
+                    datos_encontrados_en_correo = True
+            
+            # 3. MARCAR COMO LEÍDO
+            if datos_encontrados_en_correo:
+                mensaje.UnRead = False
+                mensaje.Save()
+            else:
+                # Si no encontró tablas válidas, igual lo marcamos? 
+                # Depende de ti. Por seguridad lo dejo como no leído si falla, 
+                # o puedes descomentar la línea de abajo si quieres limpiarlos igual.
+                mensaje.UnRead = False 
+                mensaje.Save()
+
+        except Exception as e:
+            print(f"Error procesando el correo {i+1}: {e}")
+            continue
+
+    # 4. GUARDAR EN EXCEL
+    if lista_datos:
+        archivo_excel = "Base_Fraude_Comercios_Final.xlsx"
+        df_nuevo = pd.DataFrame(lista_datos)
+        
+        # Reordenamos columnas para que se vea ordenado
+        columnas_orden = ["Fecha", "Hora", "Tipo", "Nombre_Comercio", "Codigo_Comercio"]
+        # Nos aseguramos que existan todas (por si acaso)
+        df_nuevo = df_nuevo[columnas_orden]
+
+        if os.path.exists(archivo_excel):
+            try:
+                df_antiguo = pd.read_excel(archivo_excel)
+                # Asegurar compatibilidad de columnas al concatenar
+                df_final = pd.concat([df_antiguo, df_nuevo], ignore_index=True)
+            except:
+                df_final = df_nuevo
+        else:
+            df_final = df_nuevo
+            
+        try:
+            df_final.to_excel(archivo_excel, index=False)
+            print("------------------------------------------------")
+            print(f"¡PROCESO TERMINADO! Se agregaron {len(lista_datos)} registros.")
+            print("Verifica las columnas: Fecha, Hora y Tipo.")
+            print("------------------------------------------------")
+        except PermissionError:
+            print("ERROR CRÍTICO: El Excel está abierto. Ciérralo y vuelve a ejecutar.")
+    else:
+        print("Se escanearon los correos pero no se encontraron tablas válidas.")
+
+if __name__ == "__main__":
+    procesar_correos_bancarios_v5()
