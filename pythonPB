@@ -1,0 +1,28 @@
+# El dataset ya viene cargado automáticamente como 'dataset'
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+
+# 1. Seleccionamos las columnas numéricas para el análisis
+# Usamos MONTO y HORA (que son clave para ver ataques de robots)
+# Asegúrate de que los nombres de las columnas sean IGUALES a los tuyos
+datos_modelo = dataset[['acf_monto_moneda_local', 'Hora_Simple']].fillna(0)
+
+# 2. Convertimos el ENTRY MODE a número (porque a los robots les gusta el E-commerce)
+# Si no tienes esta columna, borra estas 3 líneas siguientes
+if 'acf_entry_mode' in dataset.columns:
+    # Convertimos texto a códigos numéricos rápidos
+    datos_modelo['entry_mode_cod'] = dataset['acf_entry_mode'].astype('category').cat.codes
+
+# 3. EL ALGORITMO (Isolation Forest)
+# contamination=0.02 significa que buscamos el 2% más raro (aprox 1200 casos de tus 60k)
+clf = IsolationForest(contamination=0.02, random_state=42)
+
+# 4. Predecimos
+# -1 es Anomalía, 1 es Normal
+prediccion = clf.fit_predict(datos_modelo)
+
+# 5. Guardamos el resultado en tu tabla original
+dataset['Es_Anomalia_IA'] = ["SI" if x == -1 else "NO" for x in prediccion]
+dataset['Score_Rareza'] = clf.decision_function(datos_modelo) 
+
+# Power BI tomará el 'dataset' modificado
