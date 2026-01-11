@@ -4,9 +4,13 @@ import re
 import os
 import datetime
 
-# --- FUNCIÓN DE LIMPIEZA ---
+# --- CONFIGURACIÓN DE USUARIO ---
+# TRUE = Guarda los Wallet IDs como si fueran Hashes (porque se parecen).
+# FALSE = Si el correo dice "Wallet ID", ignora los códigos encontrados en ese correo.
+INCLUIR_WALLET_IDS = True 
+
 def limpiar_html_a_texto(html_sucio):
-    """Convierte el HTML en texto plano para la búsqueda por Regex."""
+    """Limpia el HTML para dejar solo texto legible."""
     if not html_sucio: return ""
     texto = html_sucio.replace('<br>', ' ').replace('</td>', ' ').replace('</div>', ' ')
     texto_limpio = re.sub(r'<[^>]+>', ' ', texto)
@@ -14,19 +18,19 @@ def limpiar_html_a_texto(html_sucio):
     return re.sub(' +', ' ', texto_final).strip()
 
 def verificar_excel_cerrado(ruta_excel):
-    """Pilar 1: Seguridad de Archivo"""
+    """Pilar 1: Seguridad de Archivo - Verifica si se puede escribir."""
     if os.path.exists(ruta_excel):
         try:
             with open(ruta_excel, "a"): pass
         except PermissionError: return False
     return True
 
-def procesar_correos_ips_hashes_v2():
-    print("--- INICIANDO EXTRACCIÓN DE IPS Y HASHES (VERSIÓN ROBUSTA) ---")
+def procesar_correos_ips_hashes_final():
+    print(f"--- INICIANDO EXTRACCIÓN (Mode Wallet ID: {'INCLUIDO' if INCLUIR_WALLET_IDS else 'EXCLUIDO'}) ---")
     
     archivo_excel = "Base_IPs_Hashes.xlsx"
     
-    # 1. SEGURIDAD DE ARCHIVO
+    # 1. SEGURIDAD DE ARCHIVO (Pilar 1)
     if not verificar_excel_cerrado(archivo_excel):
         print("❌ ERROR CRÍTICO: El Excel está abierto. Ciérralo y vuelve a ejecutar.")
         return
@@ -35,14 +39,15 @@ def procesar_correos_ips_hashes_v2():
     try:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
         inbox = outlook.GetDefaultFolder(6)
+        # Asegúrate de que el nombre de la carpeta sea exacto
         carpeta_destino = inbox.Folders("ips_Hash") 
     except Exception as e:
         print("Error: No se encuentra la carpeta 'ips_Hash'. Verifica el nombre.")
         return
 
-    # --- ORDENAMIENTO DE LECTURA (Viejo -> Nuevo) ---
+    # --- ORDENAMIENTO DE LECTURA (Del más antiguo al más nuevo) ---
     items = carpeta_destino.Items
-    items.Sort("[ReceivedTime]", False) # False = Ascendente
+    items.Sort("[ReceivedTime]", False) # False = Ascendente (Viejo -> Nuevo)
     mensajes_filtrados = items.Restrict("[UnRead] = True")
     
     lista_mensajes = list(mensajes_filtrados)
@@ -50,22 +55,24 @@ def procesar_correos_ips_hashes_v2():
     print(f"Correos pendientes encontrados: {cantidad}")
 
     if cantidad == 0:
+        print("No hay nada pendiente.")
         return
 
     # Listas para almacenar resultados
     todos_los_hashes_nuevos = []
     todos_los_ips_nuevos = []
-    mensajes_para_marcar = [] # Pilar 2: Transaccionalidad
+    mensajes_para_marcar = [] # Para el Pilar 2 (Transaccionalidad)
 
+    # Regex
     regex_ip = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    regex_hash = r'\b[a-fA-F0-9]{16,}\b'
+    regex_hash = r'\b[a-fA-F0-9]{16,}\b' # Captura Hashes y Wallet IDs
 
     # 3. PROCESAR CADA CORREO
     for i, mensaje in enumerate(lista_mensajes):
         try:
             print(f"Procesando correo {i+1}/{cantidad}...")
             
-            # Datos de tiempo + Fantasma (Pilar 3)
+            # Datos de tiempo + Dato Fantasma (Pilar 3)
             fecha_obj = mensaje.ReceivedTime
             fecha_str = fecha_obj.strftime("%d/%m/%Y")
             hora_str = fecha_obj.strftime("%H:%M:%S")
@@ -73,14 +80,27 @@ def procesar_correos_ips_hashes_v2():
 
             texto_cuerpo = limpiar_html_a_texto(mensaje.HTMLBody)
             
+            # Búsqueda de patrones
             hashes_encontrados = re.findall(regex_hash, texto_cuerpo)
             ips_encontradas = re.findall(regex_ip, texto_cuerpo)
             
             encontrado_algo = False
 
+            # --- LÓGICA DE FILTRO DE WALLET ID ---
+            # Detectamos si el correo menciona explícitamente "Wallet ID"
+            es_correo_wallet = "WALLET ID" in texto_cuerpo.upper()
+
             # Procesar Hashes
             for h in hashes_encontrados:
-                if "1e2932eb0f962f6e" in h and len(hashes_encontrados) > 1: continue
+                # Filtro de ejemplo (el hash que se repite siempre)
+                if "1e2932eb0f962f6e" in h: continue
+                
+                # OPCIÓN DE EXCLUSIÓN:
+                if not INCLUIR_WALLET_IDS and es_correo_wallet:
+                    # Si el usuario NO quiere Wallets y el correo es de Wallet, saltamos
+                    print(f"  > Ignorando posible Wallet ID: {h[:10]}...")
+                    continue
+
                 todos_los_hashes_nuevos.append({
                     "Fecha": fecha_str,
                     "Hora": hora_str,
@@ -91,7 +111,9 @@ def procesar_correos_ips_hashes_v2():
                 
             # Procesar IPs
             for ip in ips_encontradas:
+                 # Filtros de IPs locales o basura
                  if ip.startswith("127.0") or ip.startswith("10."): continue
+                 
                  todos_los_ips_nuevos.append({
                      "Fecha": fecha_str,
                      "Hora": hora_str,
@@ -100,84 +122,99 @@ def procesar_correos_ips_hashes_v2():
                  })
                  encontrado_algo = True
 
-            if encontrado_algo:
+            # Si encontramos datos válidos (o si el correo estaba vacío de datos pero era válido)
+            # lo agregamos a la lista para marcar como leído AL FINAL
+            if encontrado_algo or (not hashes_encontrados and not ips_encontradas):
                 mensajes_para_marcar.append(mensaje)
 
         except Exception as e:
             print(f"Error en correo {i+1}: {e}")
             continue
 
-    # 4. GUARDAR Y ORDENAR
-    # Función auxiliar para procesar cada DataFrame (Hashes e IPs) por separado
-    def procesar_y_ordenar(df_nuevos, nombre_hoja):
-        if df_nuevos.empty: return pd.DataFrame() # Retorna vacío si no hay nuevos
-        
-        df_final = df_nuevos
-        if os.path.exists(archivo_excel):
-            try:
-                df_antiguos = pd.read_excel(archivo_excel, sheet_name=nombre_hoja)
-                if not df_antiguos.empty:
-                    # Reconstruir fantasma
-                    df_antiguos["_orden_fantasma"] = pd.to_datetime(
-                        df_antiguos["Fecha"].astype(str) + " " + df_antiguos["Hora"].astype(str),
-                        dayfirst=True, errors='coerce'
-                    )
-                    df_final = pd.concat([df_antiguos, df_nuevos], ignore_index=True)
-            except:
-                pass # Si falla leer (ej. hoja no existe), nos quedamos con los nuevos
-
-        # Ordenar (Pilar 3)
-        if "_orden_fantasma" in df_final.columns:
-             df_final = df_final.sort_values(by="_orden_fantasma", ascending=True, kind='mergesort')
-             df_final = df_final.drop(columns=["_orden_fantasma"])
-        
-        return df_final
-
-    # Procesamos ambos tipos de datos
+    # 4. GUARDAR Y ORDENAR (LÓGICA BLINDADA - PRESERVA HOJAS)
+    print("Preparando para guardar...")
+    
+    # Convertimos a DataFrame
     df_hashes_nuevos = pd.DataFrame(todos_los_hashes_nuevos)
     df_ips_nuevos = pd.DataFrame(todos_los_ips_nuevos)
 
-    print(f"Nuevos encontrados: {len(df_hashes_nuevos)} Hashes, {len(df_ips_nuevos)} IPs.")
+    # Si no hay NADA nuevo de NADA, terminamos
+    if df_hashes_nuevos.empty and df_ips_nuevos.empty:
+        print("No se encontraron datos válidos nuevos para guardar.")
+        # Opcional: Marcar correos como leídos si ya se procesaron aunque no tuvieran datos
+        # for m in mensajes_para_marcar: m.UnRead = False; m.Save()
+        return
 
-    if not df_hashes_nuevos.empty or not df_ips_nuevos.empty:
-        try:
-            # Preparamos los DataFrames finales
-            df_hashes_final = procesar_y_ordenar(df_hashes_nuevos, 'Hashes')
-            df_ips_final = procesar_y_ordenar(df_ips_nuevos, 'IPs')
+    try:
+        # --- FASE A: CARGAR HISTÓRICO A MEMORIA ---
+        # Cargamos AMBAS hojas antes de abrir el Excel en modo escritura
+        df_hashes_final = pd.DataFrame()
+        df_ips_final = pd.DataFrame()
+        
+        # Helper para ordenar con fantasma
+        def ordenar_con_fantasma(df):
+            if not df.empty and "_orden_fantasma" in df.columns:
+                # Reparar fantasma en datos viejos si falta
+                mask = df["_orden_fantasma"].isna()
+                if mask.any():
+                    df.loc[mask, "_orden_fantasma"] = pd.to_datetime(
+                        df.loc[mask, "Fecha"].astype(str) + " " + df.loc[mask, "Hora"].astype(str),
+                        dayfirst=True, errors='coerce'
+                    )
+                # Orden MergeSort (Estable)
+                df = df.sort_values(by="_orden_fantasma", ascending=True, kind='mergesort')
+                return df.drop(columns=["_orden_fantasma"])
+            return df
+
+        if os.path.exists(archivo_excel):
+            try:
+                # Intentamos leer Hashes viejos
+                df_hashes_antiguos = pd.read_excel(archivo_excel, sheet_name='Hashes')
+                df_hashes_final = df_hashes_antiguos
+            except: pass 
+
+            try:
+                # Intentamos leer IPs viejas
+                df_ips_antiguos = pd.read_excel(archivo_excel, sheet_name='IPs')
+                df_ips_final = df_ips_antiguos
+            except: pass 
+
+        # --- FASE B: COMBINAR ---
+        if not df_hashes_nuevos.empty:
+            df_hashes_final = pd.concat([df_hashes_final, df_hashes_nuevos], ignore_index=True)
+        
+        if not df_ips_nuevos.empty:
+            df_ips_final = pd.concat([df_ips_final, df_ips_nuevos], ignore_index=True)
+
+        # --- FASE C: ORDENAR ---
+        df_hashes_final = ordenar_con_fantasma(df_hashes_final)
+        df_ips_final = ordenar_con_fantasma(df_ips_final)
+
+        # --- FASE D: GUARDAR TODO ---
+        with pd.ExcelWriter(archivo_excel, engine='openpyxl', mode='w') as writer:
+            if not df_hashes_final.empty:
+                df_hashes_final.to_excel(writer, sheet_name='Hashes', index=False)
             
-            # Guardamos (Sobreescribimos el archivo con ambas hojas actualizadas)
-            with pd.ExcelWriter(archivo_excel, engine='openpyxl', mode='w') as writer:
-                if not df_hashes_final.empty:
-                    df_hashes_final.to_excel(writer, sheet_name='Hashes', index=False)
-                elif os.path.exists(archivo_excel): # Si no hubo nuevos hashes, intentar preservar los viejos
-                     try:
-                        old_h = pd.read_excel(archivo_excel, sheet_name='Hashes')
-                        old_h.to_excel(writer, sheet_name='Hashes', index=False)
-                     except: pass
+            if not df_ips_final.empty:
+                df_ips_final.to_excel(writer, sheet_name='IPs', index=False)
 
-                if not df_ips_final.empty:
-                    df_ips_final.to_excel(writer, sheet_name='IPs', index=False)
-                elif os.path.exists(archivo_excel): # Si no hubo nuevas IPs, intentar preservar las viejas
-                     try:
-                        old_i = pd.read_excel(archivo_excel, sheet_name='IPs')
-                        old_i.to_excel(writer, sheet_name='IPs', index=False)
-                     except: pass
+        print(f"✅ ¡ÉXITO! Base actualizada: {archivo_excel}")
+        print(f"   > Total Hashes: {len(df_hashes_final)}")
+        print(f"   > Total IPs: {len(df_ips_final)}")
 
-            print(f"✅ ¡ÉXITO! Base actualizada: {archivo_excel}")
+        # --- FASE E: TRANSACCIONALIDAD (Pilar 2) ---
+        print("Actualizando estado de correos a LEÍDO...")
+        for m in mensajes_para_marcar:
+            try:
+                m.UnRead = False
+                m.Save()
+            except: pass
+        print("Proceso finalizado correctamente.")
 
-            # --- Pilar 2: Marcar como leídos al final ---
-            print("Actualizando estado de correos...")
-            for m in mensajes_para_marcar:
-                try: m.UnRead = False; m.Save()
-                except: pass
-            print("Proceso finalizado correctamente.")
-
-        except PermissionError:
-            print("❌ ERROR: El Excel sigue abierto. No se guardó nada.")
-        except Exception as e:
-            print(f"Error guardando Excel: {e}")
-    else:
-        print("No se encontraron datos válidos nuevos.")
+    except PermissionError:
+        print("❌ ERROR: El Excel sigue abierto. Ciérralo y reintenta.")
+    except Exception as e:
+        print(f"Error guardando Excel: {e}")
 
 if __name__ == "__main__":
-    procesar_correos_ips_hashes_v2()
+    procesar_correos_ips_hashes_final()
