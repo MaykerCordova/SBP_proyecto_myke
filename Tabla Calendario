@@ -1,0 +1,44 @@
+let
+    // --- CONFIGURACIÓN ---
+    // Definimos el inicio manualmente para que la carga sea INSTANTÁNEA.
+    // Cambia el (2023, 1, 1) por la fecha de tu data histórica más antigua.
+    FechaInicio = #date(2023, 1, 1),
+    
+    // El final siempre es hoy. Se actualiza solo.
+    FechaFin = Date.From(DateTime.LocalNow()), 
+    
+    // --- GENERACIÓN DE TABLA ---
+    Dias = Duration.Days(FechaFin - FechaInicio) + 1,
+    Origen = List.Dates(FechaInicio, Dias, #duration(1, 0, 0, 0)),
+    #"Convertido a tabla" = Table.FromList(Origen, Splitter.SplitByNothing(), null, null, ExtraValues.Error),
+    #"Renombrada Columns" = Table.RenameColumns(#"Convertido a tabla",{{"Column1", "Date"}}),
+    #"Tipo cambiado" = Table.TransformColumnTypes(#"Renombrada Columns",{{"Date", type date}}),
+
+    // --- COLUMNAS ESTÁNDAR ---
+    #"Año insertado" = Table.AddColumn(#"Tipo cambiado", "Año", each Date.Year([Date]), Int64.Type),
+    #"Mes insertado" = Table.AddColumn(#"Año insertado", "Mes Nro", each Date.Month([Date]), Int64.Type),
+    #"Nombre del mes insertado" = Table.AddColumn(#"Mes insertado", "Mes", each Date.MonthName([Date]), type text),
+    // Usamos Text.Start para abreviar el mes (Ene, Feb, Mar)
+    #"Nombre del mes corto" = Table.AddColumn(#"Nombre del mes insertado", "Mes Corto", each Text.Start([Mes], 3), type text),
+    #"Día de la semana insertado" = Table.AddColumn(#"Nombre del mes corto", "DiaSemana Nro", each Date.DayOfWeek([Date], Day.Monday) + 1, Int64.Type),
+    #"Nombre del día insertado" = Table.AddColumn(#"Día de la semana insertado", "Dia Nombre", each Date.DayOfWeekName([Date]), type text),
+    
+    // --- COLUMNAS PARA FRAUDE ---
+    // Flag binario (1/0) o Texto (Sí/No) para filtrar fines de semana rápido
+    #"Es Fin de Semana" = Table.AddColumn(#"Nombre del día insertado", "Es Fin de Semana", each if [DiaSemana Nro] >= 6 then "Sí" else "No", type text),
+
+    // --- AÑO FISCAL CANADIENSE (Inicio 1 Nov) ---
+    // Lógica: Si es Nov(11) o Dic(12), pertenece al año siguiente fiscal.
+    #"Año Fiscal Canadiense" = Table.AddColumn(#"Es Fin de Semana", "Año Fiscal CA", each if [Mes Nro] >= 11 then [Año] + 1 else [Año], Int64.Type),
+    
+    // Mes Fiscal: Noviembre es el mes 1, Octubre es el mes 12.
+    #"Mes Fiscal Canadiense" = Table.AddColumn(#"Año Fiscal Canadiense", "Mes Fiscal CA", each if [Mes Nro] >= 11 then [Mes Nro] - 10 else [Mes Nro] + 2, Int64.Type),
+    
+    // Trimestre Fiscal
+    #"Trimestre Fiscal Canadiense" = Table.AddColumn(#"Mes Fiscal Canadiense", "Q Fiscal CA", each "Q" & Number.ToText(Number.RoundUp([Mes Fiscal CA] / 3)), type text),
+
+    // Etiqueta FY (Ej: "FY25")
+    #"FY Etiqueta" = Table.AddColumn(#"Trimestre Fiscal Canadiense", "FY", each "FY" & Text.End(Number.ToText([Año Fiscal CA]), 2), type text)
+
+in
+    #"FY Etiqueta"
