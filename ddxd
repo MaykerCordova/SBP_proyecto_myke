@@ -1,11 +1,11 @@
-🇨🇦 Canadá Reportó una sesión sin eventos de fraude o alertas relevantes para el periodo. La operación se mantiene estable y sin hallazgos que deban ser informados al resto de las regiones.
+🇨🇦 Canadá Operación sin novedades relevantes durante el periodo. La sesión concluyó sin reportes de nuevos eventos o tipologías de fraude que afecten a la región.
 
-🇨🇱 Chile (BNS) Detectó intentos constantes en billeteras digitales con tarjetas de crédito y débito operadas físicamente en España, especialmente en el comercio Esselunga. El foco de monitoreo se centra en los MCC 7995 (Casinos) y 6211 (Brokers) debido a estos patrones recurrentes.
+🇨🇱 Chile (BNS) Informó transacciones rechazadas en ACS para el comercio CEBU AIR INC (IDs 200035682/81) en tarjetas de débito y crédito. Detectó un patrón de fraude presencial en Italia (comercios tipo "ESSELUNGA") vinculado al uso de billeteras digitales. Se alertó sobre el monitoreo de los MCC 7999 y 6211 para mitigar estos ataques en sectores de servicios y financieros.
 
-🇨🇱 Chile (CAT) Informó que su herramienta BioCatch detectó patrones de comportamiento sospechosos vinculados al uso de wallets en casinos. Los detalles de estos casos fueron compartidos en el chat para identificar la ruta del fraude mediante biometría conductual.
+🇨🇱 Chile (CAT) Compartió casos detectados por la herramienta BioCatch sobre el uso de billeteras digitales para retiros en casinos. Estos patrones biométricos permiten identificar el comportamiento del defraudador al momento de enrolar la tarjeta.
 
-🏝️ El Caribe Anunció la depuración de su reporte diario para excluir comercios fraudulentos ya identificados y centrarse en nuevas amenazas. Identificaron una tendencia de uso de billeteras digitales con flujos transaccionales en Panamá, España y Portugal.
+🏝️ El Caribe Depuró su reporte diario eliminando comercios fraudulentos conocidos para optimizar el monitoreo. Identificó una tendencia creciente de fraude con billeteras digitales operando desde el eje Panamá, España y Portugal.
 
-🇲🇽 México Reportó una concentración de actividad en parquímetros para el portafolio de crédito, donde la mayoría de intentos son declinados por "tarjeta inválida". Este patrón indica un uso del canal para probar plásticos antes de intentar transacciones mayores.
+🇲🇽 México Reportó un ataque de BIN Testing en parquímetros, resultando en un alto volumen de declinaciones por "tarjeta inválida". Este canal de bajo monto está siendo utilizado para validar plásticos del portafolio de crédito.
 
-🌐 Tendencias Globales Se confirma el desplazamiento del fraude hacia las Billeteras Digitales, impulsado por campañas de Phishing (mencionado como feeling) que están operando fuertemente desde el eje Panamá, España y Portugal.
+🌐 Tendencias Globales Se observa una migración masiva del fraude hacia el canal digital mediante el Phishing (enrolamiento de wallets). Esta modalidad está explotando principalmente comercios en Europa y pasarelas de pago en Centroamérica.
