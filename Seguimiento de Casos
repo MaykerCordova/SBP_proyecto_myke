@@ -1,3 +1,38 @@
+ejemplos
+Estimado equipo, se remite el siguiente caso para análisis.
+
+INSTANCIA: Primera
+TIPO: ALERTAMIENTO TARDIO
+
+Datos generales:
+Cliente: Maria Alejandra Guzman
+DOI: 40301234
+BT: 4555********9999
+Edad: 29
+Domicilio: Calle Los Pinos 456, Miraflores
+Ocupación: Analista de Marketing
+Labora en: Agencia Digital SAC
+Segmento: Clásica
+Afectación total: S/ 2,500.00
+
+Detalle:
+Descripción:
+La cliente indica que recibió una notificación de compra en Ripley que ella no realizó.
+Indica que la tarjeta nunca salió de su billetera.
+Solicita la devolución inmediata.
+
+Transacciones:
+TABLA DE TRANSACCIONES:
+- 15/01/2026 | RIPLEY ONLINE | S/ 1,200.00 | Aprobada
+- 15/01/2026 | RIPLEY ONLINE | S/ 1,300.00 | Aprobada
+- 15/01/2026 | UBER EATS     | S/ 45.00    | Rechazada
+
+Sobre los reclamos:
+DETALLE RECLAMOS:
+El cliente presentó reclamo telefónico el día de hoy a las 10:00 AM.
+Número de reclamo: REC-0001-2026.
+Indica que irá a Indecopi si no tiene respuesta en 48 horas.
+
 import win32com.client
 import pandas as pd
 import os
