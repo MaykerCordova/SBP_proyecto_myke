@@ -393,3 +393,371 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#######################
+########### mejora 2
+#################
+
+
+import win32com.client
+import pandas as pd
+import os
+import re
+import sqlite3
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+# ==========================================
+# 1. CONFIGURACIÓN
+# ==========================================
+CONFIG = {
+    "RUTA_EXCEL": r"C:\Users\jcordova\Scotiabank\Fraude\Bitacora_Casos_Analisis.xlsx",
+    "RUTA_DB_SQLITE": r"C:\Users\jcordova\Scotiabank\Fraude\Respaldo_Casos.db",
+    "RUTA_BACKUP_MSG": r"C:\Users\jcordova\Scotiabank\Fraude\Evidencia_Casos",
+    "FOLDER_SOLICITUDES": "Bitacora_Solicitudes",
+    "FOLDER_RESPUESTAS": "Bitacora_Respuestas",
+    "REGEX_ID": r"(?:DNI|BT|ID|RUC)[:\s]+([\w-]+)|\[([\w-]+)\]"
+}
+
+# ==========================================
+# 2. GESTOR SQLITE
+# ==========================================
+class GestorBackupSQL:
+    def __init__(self, ruta_db):
+        self.ruta_db = ruta_db
+        self.conectar_y_crear_tabla()
+
+    def conectar_y_crear_tabla(self):
+        os.makedirs(os.path.dirname(self.ruta_db), exist_ok=True)
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                # TABLA ACTUALIZADA CON TODOS LOS CAMPOS NUEVOS
+                sql_create = """
+                CREATE TABLE IF NOT EXISTS Bitacora (
+                    Nro_Correlativo INTEGER, Fecha_Recepcion TEXT, Hora_Recepcion TEXT,
+                    Instancia TEXT, Tipo_Fraude TEXT, Cliente TEXT, DOI TEXT, BT TEXT, 
+                    Edad TEXT, Domicilio TEXT, Ocupacion TEXT, Labora_En TEXT, Segmento TEXT,
+                    Afectacion_Total TEXT, Detalle_Descripcion TEXT, Texto_Transacciones TEXT,
+                    Detalle_Reclamos TEXT, Ruta_Evidencia TEXT, Analisis_Especialista TEXT,
+                    Estado_Caso TEXT, Maker_Deteccion TEXT, Specialist_Checker TEXT,
+                    Fecha_Cierre TEXT, ID_Sistema TEXT PRIMARY KEY
+                )
+                """
+                cursor.execute(sql_create)
+                conn.commit()
+        except Exception as e: print(f"⚠️ Error SQL Init: {e}")
+
+    def insertar_solicitud(self, datos):
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                cols = ', '.join(datos.keys())
+                placeholders = ', '.join([':' + k for k in datos.keys()])
+                sql = f"INSERT OR REPLACE INTO Bitacora ({cols}) VALUES ({placeholders})"
+                cursor.execute(sql, datos)
+                conn.commit()
+        except Exception as e: print(f"⚠️ Error SQL Insert: {e}")
+
+    def actualizar_cierre(self, id_sistema, checker, fecha_cierre):
+        try:
+            with sqlite3.connect(self.ruta_db) as conn:
+                cursor = conn.cursor()
+                sql = "UPDATE Bitacora SET Estado_Caso='Cerrado', Specialist_Checker=?, Fecha_Cierre=? WHERE ID_Sistema=?"
+                cursor.execute(sql, (checker, fecha_cierre, id_sistema))
+                conn.commit()
+        except Exception as e: print(f"⚠️ Error SQL Update: {e}")
+
+# ==========================================
+# 3. DISEÑO EXCEL (CON AJUSTE DE TEXTO)
+# ==========================================
+def embellecer_excel(ruta_excel):
+    try:
+        wb = load_workbook(ruta_excel)
+        ws = wb.active
+        
+        # Estilos Header
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="800080", end_color="800080", fill_type="solid")
+        
+        # Estilo Celdas (Ajustar Texto para que se vean los Enters)
+        alineacion_body = Alignment(vertical='top', wrap_text=True)
+
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # Aplicar wrap_text a todas las filas de datos
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = alineacion_body
+
+        # Ajustar anchos
+        ws.column_dimensions["O"].width = 50 # Descripción más ancha
+        ws.column_dimensions["P"].width = 40 # Transacciones
+        ws.column_dimensions["Q"].width = 40 # Reclamos
+
+        wb.save(ruta_excel)
+    except: pass
+
+# ==========================================
+# 4. GESTIÓN OUTLOOK
+# ==========================================
+class HerramientasOutlook:
+    def __init__(self):
+        try:
+            self.outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+            self.inbox = self.outlook.GetDefaultFolder(6)
+        except: print("Error Outlook")
+
+    def buscar_carpeta(self, nombre):
+        try: return self.inbox.Folders[nombre]
+        except: 
+            try: return self.outlook.Folders[nombre]
+            except: return None
+
+    def guardar_msg(self, mail, nombre_base):
+        if not os.path.exists(CONFIG["RUTA_BACKUP_MSG"]): os.makedirs(CONFIG["RUTA_BACKUP_MSG"])
+        clean = re.sub(r'[\\/*?:"<>|]', "_", nombre_base)
+        ruta = os.path.join(CONFIG["RUTA_BACKUP_MSG"], f"{clean}.msg")
+        try: mail.SaveAs(ruta); return ruta
+        except: return "Error MSG"
+
+    def guardar_adjuntos(self, mail, id_sistema):
+        clean_id = re.sub(r'[\\/*?:"<>|]', "_", id_sistema)
+        carpeta_destino = os.path.join(CONFIG["RUTA_BACKUP_MSG"], f"EVIDENCIA_{clean_id}")
+        if not os.path.exists(carpeta_destino): os.makedirs(carpeta_destino)
+        
+        conteo = 0
+        try:
+            for adjunto in mail.Attachments:
+                ruta = os.path.join(carpeta_destino, adjunto.FileName)
+                adjunto.SaveAsFile(ruta)
+                conteo += 1
+            return f"{carpeta_destino}" if conteo > 0 else "Sin adjuntos"
+        except: return "Error Adjuntos"
+
+class ProcesadorTexto:
+    @staticmethod
+    def extraer_id(asunto):
+        match = re.search(CONFIG["REGEX_ID"], asunto, re.IGNORECASE)
+        if match: return (match.group(1) or match.group(2)).upper().strip()
+        return None
+
+    @staticmethod
+    def parsear_cuerpo(cuerpo):
+        datos = {}
+        # PATRONES ACTUALIZADOS (AGREGADOS INSTANCIA, TIPO, TRANSACCIONES, RECLAMOS)
+        patrones = {
+            "Instancia":        r"(?i)INSTANCIA:\s*(.*)",
+            "Tipo_Fraude":      r"(?i)TIPO:\s*(.*)",  # Busca "TIPO: ALERTAMIENTO..."
+            "Cliente":          r"(?i)Cliente:\s*(.*)",
+            "DOI":              r"(?i)DOI:\s*(.*)",
+            "BT":               r"(?i)BT:\s*(.*)",
+            "Edad":             r"(?i)Edad:\s*(.*)",
+            "Domicilio":        r"(?i)Domicilio:\s*(.*)",
+            "Ocupacion":        r"(?i)Ocupaci[oó]n:\s*(.*)",
+            "Labora_En":        r"(?i)Labora en:\s*(.*)",
+            "Segmento":         r"(?i)Segmento:\s*(.*)",
+            "Afectacion_Total": r"(?i)Afectaci[oó]n total:\s*(.*)",
+            
+            # CAMPOS MULTILINEA (Usamos (?s) para capturar saltos de línea hasta el sgte campo)
+            "Detalle_Descripcion": r"(?i)(?s)Descripci[oó]n\s*[:\n]\s*(.*?)(?=\n\s*Transacciones:|$)",
+            "Texto_Transacciones": r"(?i)(?s)TABLA DE TRANSACCIONES\s*[:\n]\s*(.*?)(?=\n\s*Sobre los reclamos:|$)",
+            "Detalle_Reclamos":    r"(?i)(?s)DETALLE RECLAMOS\s*[:\n]\s*(.*?)(?=$)"
+        }
+        
+        for k, v in patrones.items():
+            match = re.search(v, cuerpo)
+            if match:
+                raw_val = match.group(1).strip()
+                
+                # --- LOGICA: MANTENER FORMATO LISTA ---
+                # Para estos 3 campos, NO borramos los Enters (\n)
+                if k in ["Detalle_Descripcion", "Texto_Transacciones", "Detalle_Reclamos"]:
+                    valor = raw_val.replace('\r', '') # Solo quitamos basura de Windows
+                else:
+                    # Para datos cortos, aplanamos todo
+                    valor = raw_val.replace('\r', ' ').replace('\n', ' ')
+                
+                datos[k] = valor
+            else:
+                datos[k] = "-"
+        return datos
+
+class GestorBitacora:
+    def __init__(self):
+        self.ruta = CONFIG["RUTA_EXCEL"]
+        # LISTA DE COLUMNAS COMPLETA
+        self.columnas = [
+            "Nro_Correlativo", "Fecha_Recepcion", "Hora_Recepcion", 
+            "Instancia", "Tipo_Fraude",   # <--- NUEVAS
+            "Cliente", "DOI", "BT", "Edad",
+            "Domicilio", "Ocupacion", "Labora_En", "Segmento",
+            "Afectacion_Total", 
+            "Detalle_Descripcion",        # Multilínea
+            "Texto_Transacciones",        # <--- NUEVA Multilínea
+            "Detalle_Reclamos",           # <--- NUEVA Multilínea
+            "Ruta_Evidencia", "Analisis_Especialista",
+            "Estado_Caso", "Maker_Deteccion", "Specialist_Checker",
+            "Fecha_Cierre", "ID_Sistema"
+        ]
+        self.cargar_excel()
+
+    def cargar_excel(self):
+        if os.path.exists(self.ruta):
+            try:
+                self.df = pd.read_excel(self.ruta, dtype=str)
+                self.df.fillna("", inplace=True)
+            except: self.df = None; print("⛔ CIERRA EL EXCEL PRIMERO.")
+        else:
+            self.df = pd.DataFrame(columns=self.columnas).astype(object)
+
+    def guardar(self):
+        if self.df is not None:
+            try: self.df.to_excel(self.ruta, index=False)
+            except: print("❌ Error guardando Excel.")
+
+    def obtener_correlativo(self):
+        if self.df is None or self.df.empty: return 1
+        try:
+            numeros = pd.to_numeric(self.df["Nro_Correlativo"], errors='coerce')
+            mx = numeros.max()
+            return 1 if pd.isna(mx) else int(mx) + 1
+        except: return 1
+
+    def existe_id(self, id_sys):
+        if self.df is None or self.df.empty: return False
+        return id_sys in self.df["ID_Sistema"].astype(str).values
+
+    def insertar(self, data):
+        if self.df is not None:
+            nuevo_df = pd.DataFrame([data]).astype(object)
+            self.df = pd.concat([self.df, nuevo_df], ignore_index=True)
+
+    def actualizar_solicitud(self, data):
+        if self.df is None: return False
+        idxs = self.df.index[self.df["ID_Sistema"] == data["ID_Sistema"]].tolist()
+        if idxs:
+            idx = idxs[0]
+            if "CERRADO" in str(self.df.at[idx, "Estado_Caso"]).upper(): return False
+            
+            # Actualizamos TODOS los campos capturados
+            campos = ["Instancia", "Tipo_Fraude", "Cliente", "DOI", "BT", "Edad", 
+                      "Domicilio", "Ocupacion", "Labora_En", "Segmento", 
+                      "Afectacion_Total", "Detalle_Descripcion", "Texto_Transacciones",
+                      "Detalle_Reclamos", "Ruta_Evidencia"]
+            for c in campos: self.df.at[idx, c] = data[c]
+            return True
+        return False
+
+    def cerrar_caso(self, id_sys, checker, fecha_cierre):
+        if self.df is None: return False
+        idxs = self.df.index[self.df["ID_Sistema"] == id_sys].tolist()
+        if idxs:
+            idx = idxs[0]
+            if "CERRADO" in str(self.df.at[idx, "Estado_Caso"]).upper(): return False
+            self.df.at[idx, "Estado_Caso"] = "Cerrado"
+            self.df.at[idx, "Specialist_Checker"] = str(checker)
+            self.df.at[idx, "Fecha_Cierre"] = str(fecha_cierre)
+            return True
+        return False
+
+# ==========================================
+# 5. MAIN
+# ==========================================
+def main():
+    print("--- 🕵️‍♂️ ROBOT CASOS FRAUDE v5.0 (FULL CAMPOS) ---")
+    outlook = HerramientasOutlook()
+    bitacora = GestorBitacora()
+    sql = GestorBackupSQL(CONFIG["RUTA_DB_SQLITE"])
+
+    if bitacora.df is None: return
+    cambios = 0
+
+    # FASE 1: SOLICITUDES
+    sol_folder = outlook.buscar_carpeta(CONFIG["FOLDER_SOLICITUDES"])
+    if sol_folder:
+        msgs = [m for m in sol_folder.Items if m.UnRead]
+        msgs.sort(key=lambda x: x.ReceivedTime)
+
+        for m in msgs:
+            try:
+                id_sys = ProcesadorTexto.extraer_id(m.Subject)
+                if not id_sys: continue
+
+                es_correccion = "CORRECCION" in m.Subject.upper()
+                existe = bitacora.existe_id(id_sys)
+
+                if not existe or (existe and es_correccion):
+                    d = ProcesadorTexto.parsear_cuerpo(m.Body)
+                    ruta_evidencia = outlook.guardar_adjuntos(m, id_sys)
+                    
+                    if existe: correlativo = 0
+                    else: correlativo = bitacora.obtener_correlativo()
+
+                    fila = {
+                        "Nro_Correlativo": correlativo,
+                        "Fecha_Recepcion": m.SentOn.strftime("%d/%m/%Y"),
+                        "Hora_Recepcion": m.SentOn.strftime("%H:%M"),
+                        "Instancia": d['Instancia'],
+                        "Tipo_Fraude": d['Tipo_Fraude'],
+                        "Cliente": d['Cliente'], "DOI": d['DOI'], "BT": d['BT'],
+                        "Edad": d['Edad'], "Domicilio": d['Domicilio'],
+                        "Ocupacion": d['Ocupacion'], "Labora_En": d['Labora_En'],
+                        "Segmento": d['Segmento'], "Afectacion_Total": d['Afectacion_Total'],
+                        "Detalle_Descripcion": d['Detalle_Descripcion'],
+                        "Texto_Transacciones": d['Texto_Transacciones'],
+                        "Detalle_Reclamos": d['Detalle_Reclamos'],
+                        "Ruta_Evidencia": ruta_evidencia,
+                        "Analisis_Especialista": "", "Estado_Caso": "Pendiente",
+                        "Maker_Deteccion": m.SenderName, "Specialist_Checker": "",
+                        "Fecha_Cierre": "", "ID_Sistema": id_sys
+                    }
+
+                    if existe and es_correccion:
+                        print(f" 🔄 Corrección: {id_sys}")
+                        if bitacora.actualizar_solicitud(fila):
+                            sql.insertar_solicitud(fila)
+                            m.UnRead = False; cambios += 1
+                    elif not existe:
+                        print(f" [+] Nuevo Caso: {id_sys}")
+                        bitacora.insertar(fila)
+                        sql.insertar_solicitud(fila)
+                        m.UnRead = False; cambios += 1
+            except Exception as e: print(f"Error Fase 1: {e}")
+
+    # FASE 2: RESPUESTAS
+    resp_folder = outlook.buscar_carpeta(CONFIG["FOLDER_RESPUESTAS"])
+    if resp_folder:
+        msgs = [m for m in resp_folder.Items if m.UnRead]
+        msgs.sort(key=lambda x: x.ReceivedTime)
+        
+        for m in msgs:
+            try:
+                id_sys = ProcesadorTexto.extraer_id(m.Subject)
+                cuerpo = m.Body.lower().replace('\r', '').replace('\n', '')
+                frases = ["segun lo revisado", "según lo revisado", "segun lo analizado", "según lo analizado"]
+                
+                if id_sys and any(x in cuerpo for x in frases):
+                    outlook.guardar_adjuntos(m, f"{id_sys}_RESP")
+                    outlook.guardar_msg(m, f"RESP_{id_sys}")
+                    fc = m.ReceivedTime.strftime("%d/%m/%Y %H:%M")
+                    
+                    if bitacora.cerrar_caso(id_sys, m.SenderName, fc):
+                        print(f" [OK] Cerrado: {id_sys}")
+                        sql.actualizar_cierre(id_sys, m.SenderName, fc)
+                        m.UnRead = False; cambios += 1
+            except: pass
+
+    if cambios > 0:
+        bitacora.guardar()
+        embellecer_excel(CONFIG["RUTA_EXCEL"])
+        print("✅ Bitácora Actualizada.")
+    else: print("💤 Sin novedades.")
+
+if __name__ == "__main__":
+    main()
