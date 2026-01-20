@@ -1,0 +1,17 @@
+{
+  "name": "Tema Scotia Oficial",
+  "textClasses": {
+    "title": {
+      "fontFace": "Scotia"
+    },
+    "header": {
+      "fontFace": "Scotia"
+    },
+    "callout": {
+      "fontFace": "Scotia"
+    },
+    "label": {
+      "fontFace": "Scotia"
+    }
+  }
+}
