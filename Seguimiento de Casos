@@ -796,3 +796,66 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+#####################################
+copias texto###########################
+#######################################
+
+# Busca esta función dentro de class GestorBitacora y REEMPLÁZALA:
+    def cerrar_caso(self, id_sys, checker, fecha_cierre, texto_analisis):
+        if self.df is None: return False
+        idxs = self.df.index[self.df["ID_Sistema"] == id_sys].tolist()
+        if idxs:
+            idx = idxs[0]
+            # Si ya estaba cerrado, igual permitimos actualizar el análisis por si corregiste algo
+            if "CERRADO" in str(self.df.at[idx, "Estado_Caso"]).upper():
+                print(f" ⚠️ Actualizando análisis de caso cerrado: {id_sys}")
+            
+            self.df.at[idx, "Estado_Caso"] = "Cerrado"
+            self.df.at[idx, "Specialist_Checker"] = str(checker)
+            self.df.at[idx, "Fecha_Cierre"] = str(fecha_cierre)
+            
+            # --- AQUÍ ESTÁ EL CAMBIO: GUARDAMOS TU TEXTO ---
+            # Limpiamos un poco el texto para que entre bien en la celda
+            texto_limpio = str(texto_analisis).strip()
+            self.df.at[idx, "Analisis_Especialista"] = texto_limpio
+            return True
+        return False
+
+
+
+# --- FASE 2: RESPUESTAS ---
+    resp_folder = outlook.buscar_carpeta(CONFIG["FOLDER_RESPUESTAS"])
+    if resp_folder:
+        msgs = [m for m in resp_folder.Items if m.UnRead]
+        msgs.sort(key=lambda x: x.ReceivedTime)
+        
+        for m in msgs:
+            try:
+                id_sys = ProcesadorTexto.extraer_id(m.Subject)
+                
+                # Normalizamos el cuerpo para buscar las frases clave
+                cuerpo_lower = m.Body.lower()
+                frases = ["segun lo revisado", "según lo revisado", 
+                          "segun lo analizado", "según lo analizado"]
+                
+                if id_sys and any(x in cuerpo_lower for x in frases):
+                    outlook.guardar_adjuntos(m, f"{id_sys}_RESP")
+                    outlook.guardar_msg(m, f"RESP_{id_sys}")
+                    fc = m.ReceivedTime.strftime("%d/%m/%Y %H:%M")
+                    
+                    # --- AQUÍ ESTÁ EL CAMBIO ---
+                    # Pasamos m.Body (el texto completo del correo) a la función
+                    if bitacora.cerrar_caso(id_sys, m.SenderName, fc, m.Body):
+                        print(f" [OK] Cerrado y Análisis Guardado: {id_sys}")
+                        
+                        # (Opcional) Si quieres actualizar SQL también, avísame para darte esa línea,
+                        # pero con esto ya queda en tu Excel.
+                        sql.actualizar_cierre(id_sys, m.SenderName, fc)
+                        
+                        m.UnRead = False
+                        cambios += 1
+            except Exception as e: 
+                print(f"Error en respuesta: {e}")
+
