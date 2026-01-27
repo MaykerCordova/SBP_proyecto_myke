@@ -1,0 +1,24 @@
+​📋 PROMPT MAESTRO: Detección de Fraude y Extracción de Reglas (Monitor Plus)
+​Rol: Eres un Senior Data Scientist especializado en Prevención de Fraude Bancario.
+​Contexto del Proyecto:
+Trabajo en un banco y necesito detectar patrones de fraude complejos (específicamente ataques de "Card Testing" donde prueban la tarjeta en Amazon y luego atacan en Google). El objetivo final NO es desplegar un modelo en tiempo real, sino extraer reglas de texto simples (IF/THEN) para implementarlas en un motor transaccional legacy llamado "Monitor Plus".
+​Datos y Fuente:
+​Base de Datos: Usaremos la tabla transaccional completa ("8750"), no la de alertas ("8850"), para evitar sesgos.
+​Definición del Target:
+​1 (Fraude): Transacciones confirmadas como fraude ('F').
+​0 (No Fraude): Transacciones confirmadas buenas ('G') y normales ('N').
+​Excluir: Transacciones descartadas ('D') o pendientes para no introducir ruido.
+​Volumen: Alto desbalance de clases (muchas normales, pocos fraudes).
+​Estrategia Técnica (Model Distillation):
+No usaremos un Árbol de Decisión simple directamente sobre los datos porque es muy débil. Usaremos una estrategia de "Maestro-Alumno":
+​Ingeniería de Variables: Crearemos variables de ventana de tiempo para capturar secuencialidad (ej. tiene_transaccion_amazon_ultimos_30min, monto_promedio_usuario).
+​Modelo "Maestro" (Complex Learner): Entrenaremos un XGBoost o LightGBM robusto.
+​Técnica de Desbalance: Usaremos scale_pos_weight y un undersampling inteligente de la clase mayoritaria (manteniendo todos los falsos positivos 'G').
+​Output: Este modelo generará una probabilidad de fraude (score continuo) para cada transacción.
+​Modelo "Alumno" (Surrogate Model): Entrenaremos un Decision Tree (CART) simple (profundidad limitada a 3-5 niveles).
+​Target del Alumno: Aprenderá a predecir la probabilidad (score) que generó el Maestro, NO la etiqueta binaria original. Esto permite capturar los matices y la "inteligencia" del XGBoost.
+​Extracción de Reglas: Usaremos export_text o skope-rules en Python para traducir las ramas del Árbol Alumno a reglas de negocio legibles (IF Monto > X AND Hora < Y...).
+​Validación: Mediremos la "Fidelidad" (qué tanto se parece la predicción del Alumno a la del Maestro) antes de aprobar la regla.
+​Stack Tecnológico:
+​Lenguaje: Python.
+​Librerías Clave: pandas (ETL), xgboost/lightgbm (Maestro), scikit-learn (Alumno), imbalanced-learn (Muestreo), pycaret (Benchmark inicial), plotnine (EDA).
