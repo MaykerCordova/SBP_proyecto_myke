@@ -1,0 +1,242 @@
+install.packages(c("tidyverse", "tidymodels", "bonsai", "lightgbm", "rpart", "rpart.plot", "vip", "zoo"))
+# ==============================================================================
+# 1. SETUP Y LIBRERÍAS
+# ==============================================================================
+library(tidyverse)
+library(tidymodels)
+library(bonsai)      # Motor para LightGBM
+library(lightgbm)
+library(rpart)
+library(rpart.plot)  # Visualización de reglas
+library(zoo)         # Para cálculos de ventanas móviles (rollsum)
+
+# Configuración para reproducibilidad
+set.seed(123)
+
+# ==============================================================================
+# 2. GENERACIÓN DE DATASET SIMULADO (MOCK BASE 8750)
+# ==============================================================================
+# NOTA: Reemplaza este bloque con la carga de tu CSV real: 
+# df_raw <- read_csv("tu_journal_comercio.csv")
+
+n_rows <- 20000
+
+df_raw <- tibble(
+  trx_id = 1:n_rows,
+  cliente_id = sample(1:2000, n_rows, replace = TRUE),
+  fecha_hora = seq(as.POSIXct("2024-01-01"), by = "min", length.out = n_rows),
+  
+  # VARIABLES DEL NEGOCIO
+  monto = rexp(n_rows, rate = 1/50),
+  tipo_tarjeta = sample(c("C", "D"), n_rows, replace = TRUE, prob = c(0.7, 0.3)),
+  edad = sample(18:75, n_rows, replace = TRUE),
+  
+  # Variable 'Alfa2 Reverso' (Tokens mezclados)
+  alfa2_reverso = sample(c("001", "002", "999", NA), n_rows, replace = TRUE, prob = c(0.1, 0.1, 0.7, 0.1)),
+  
+  # Variable 'Código Respuesta' (Para detectar ataques de fuerza bruta)
+  codigo_respuesta = sample(c("00", "00", "00", "N7", "51"), n_rows, replace = TRUE),
+  
+  dia_semana = sample(1:7, n_rows, replace = TRUE),
+  es_feriado = sample(0:1, n_rows, replace = TRUE, prob = c(0.95, 0.05)),
+  
+  # ETIQUETA 'INDICADOR DE FRAUDE' (Base 8750)
+  # N=Normal, G=Buena (Alertada pero OK), F=Fraude, D=Descarte, P=Pendiente
+  indicador_fraude = sample(c("N", "G", "F", "D", "P"), n_rows, replace = TRUE, 
+                            prob = c(0.90, 0.04, 0.02, 0.02, 0.02))
+)
+
+# --- INYECCIÓN DE PATRÓN DE FRAUDE (Para que el modelo tenga algo que encontrar) ---
+# Patrón: Token Google (002) + Error N7 previo + Monto > 100 = FRAUDE
+df_raw <- df_raw %>%
+  arrange(cliente_id, fecha_hora) %>%
+  group_by(cliente_id) %>%
+  mutate(
+    prev_n7 = lag(codigo_respuesta, default = "00") == "N7"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    indicador_fraude = case_when(
+      alfa2_reverso == "002" & prev_n7 == TRUE & monto > 100 ~ "F",
+      TRUE ~ indicador_fraude
+    )
+  )
+
+print("Distribución Original de Etiquetas:")
+print(table(df_raw$indicador_fraude))
+
+# ==============================================================================
+# 3. PRE-PROCESAMIENTO MANUAL (ESTRATEGIA "ORO PURO")
+# ==============================================================================
+
+# A. FILTROS BÁSICOS
+# Eliminamos lo que estorba: Descartes (D) y Pendientes (P)
+df_filtrado <- df_raw %>%
+  filter(!indicador_fraude %in% c("D", "P"))
+
+# B. INGENIERÍA DE VARIABLES (Antes del Split)
+# Aquí transformamos los códigos crudos en lógica de negocio
+df_features <- df_filtrado %>%
+  arrange(cliente_id, fecha_hora) %>%
+  group_by(cliente_id) %>%
+  mutate(
+    # 1. TRADUCCIÓN DE TOKENS
+    tipo_token = case_when(
+      alfa2_reverso == "001" ~ "ApplePay",
+      alfa2_reverso == "002" ~ "GooglePay",
+      is.na(alfa2_reverso) | alfa2_reverso == "999" ~ "NoToken",
+      TRUE ~ "OtroToken"
+    ),
+    
+    # 2. PATRONES SECUENCIALES (N7)
+    # ¿Hubo un error N7 justo antes de esta transacción?
+    prev_es_n7 = ifelse(lag(codigo_respuesta, default = "00") == "N7", 1, 0),
+    # ¿Cuántos N7 hubo en las últimas 3 transacciones?
+    conteo_n7_ventana3 = rollsum(ifelse(codigo_respuesta == "N7", 1, 0), k=3, fill=0, align="right")
+  ) %>%
+  ungroup() %>%
+  # Convertir categóricas a factores
+  mutate(
+    tipo_tarjeta = as.factor(tipo_tarjeta),
+    tipo_token = as.factor(tipo_token),
+    dia_semana = as.factor(dia_semana),
+    es_feriado = as.factor(es_feriado)
+  )
+
+# C. ESTRATEGIA DE MUESTREO MANUAL
+# Objetivo: Quedarnos con TODAS las G y F, y solo una muestra de N.
+
+df_fraudes <- df_features %>% filter(indicador_fraude == "F")
+df_buenas  <- df_features %>% filter(indicador_fraude == "G") # ¡ORO PURO!
+df_normales <- df_features %>% filter(indicador_fraude == "N")
+
+# Definir ratio: Quedarnos con N = 10 veces la cantidad de (F + G)
+n_keep <- 10 * (nrow(df_fraudes) + nrow(df_buenas))
+# Si hay pocas normales, tomamos todas; si hay muchas, muestreamos.
+df_normales_sample <- df_normales %>% 
+  slice_sample(n = min(nrow(df_normales), n_keep))
+
+# UNIFICAR Y CREAR TARGET FINAL
+df_model_ready <- bind_rows(df_fraudes, df_buenas, df_normales_sample) %>%
+  mutate(
+    # F = "Fraude" (1), G y N = "NoFraude" (0)
+    target = factor(ifelse(indicador_fraude == "F", "Fraude", "NoFraude"),
+                    levels = c("Fraude", "NoFraude"))
+  ) %>%
+  # Seleccionar solo columnas útiles para el modelo
+  select(target, monto, tipo_tarjeta, tipo_token, edad, prev_es_n7, conteo_n7_ventana3, dia_semana, es_feriado)
+
+print("Distribución Final para Entrenamiento:")
+print(table(df_model_ready$target))
+
+# ==============================================================================
+# 4. SPLIT Y RECETA (TIDYMODELS)
+# ==============================================================================
+
+split <- initial_split(df_model_ready, strata = target, prop = 0.80)
+train_data <- training(split)
+test_data  <- testing(split)
+
+# RECETA PARA LIGHTGBM (EL MAESTRO)
+# LightGBM prefiere números, así que convertimos categorías a Dummies
+receta_maestro <- recipe(target ~ ., data = train_data) %>%
+  step_unknown(all_nominal_predictors()) %>%      # Manejo de nulos categóricos
+  step_impute_median(all_numeric_predictors()) %>% # Manejo de nulos numéricos
+  step_dummy(all_nominal_predictors())             # One-Hot Encoding
+
+# ==============================================================================
+# 5. ENTRENAMIENTO DEL MAESTRO (LIGHTGBM)
+# ==============================================================================
+
+spec_lgbm <- boost_tree(
+  trees = 1000, 
+  tree_depth = 6, 
+  learn_rate = 0.05, 
+  min_n = 20, 
+  loss_reduction = 0.001
+) %>%
+  set_engine("lightgbm") %>%
+  set_mode("classification")
+
+wf_maestro <- workflow() %>%
+  add_recipe(receta_maestro) %>%
+  add_model(spec_lgbm)
+
+print("--- Entrenando Maestro (LightGBM) ---")
+fit_maestro <- fit(wf_maestro, data = train_data)
+
+# Evaluación rápida (AUC)
+preds <- predict(fit_maestro, test_data, type = "prob")
+auc_score <- roc_auc(bind_cols(test_data, preds), target, .pred_Fraude)$.estimate
+print(paste("AUC del Maestro:", round(auc_score, 4)))
+
+# ==============================================================================
+# 6. MODEL DISTILLATION: ENTRENANDO AL ALUMNO (ÁRBOL DE REGLAS)
+# ==============================================================================
+
+# A. OBTENER PROBABILIDADES DEL MAESTRO
+# Usamos el dataframe original procesado (no el de train) para tener más variedad de casos
+probs_maestro <- predict(fit_maestro, df_model_ready, type = "prob")$.pred_Fraude
+
+# B. PREPARAR DATOS PARA EL ALUMNO
+# IMPORTANTE: Aquí NO usamos Dummies. Pasamos los factores originales (Texto)
+# para que la regla diga "tipo_token = GooglePay" y no "tipo_token_GooglePay > 0.5"
+df_alumno <- df_model_ready %>%
+  select(-target) %>%
+  mutate(score_maestro = probs_maestro) # El target ahora es el puntaje
+
+# C. ENTRENAR ÁRBOL SIMPLE (CART)
+# Usamos regresión porque predecimos la probabilidad (0 a 1)
+spec_alumno <- decision_tree(
+  tree_depth = 4,       # Profundidad limitada para que las reglas sean cortas (Monitor Plus)
+  min_n = 30,           # Mínimo de casos por hoja para evitar reglas ridículas
+  cost_complexity = 0.001
+) %>%
+  set_engine("rpart") %>%
+  set_mode("regression")
+
+fit_alumno <- fit(spec_alumno, score_maestro ~ ., data = df_alumno)
+
+# ==============================================================================
+# 7. EXTRACCIÓN DE REGLAS FINAL (OUTPUT)
+# ==============================================================================
+
+print(" ")
+print("=========================================================")
+print("   REGLAS DE NEGOCIO PARA MONITOR PLUS (IF/THEN)")
+print("=========================================================")
+
+# Esta función genera las reglas estilo SQL/Texto
+# cover = % de transacciones que caen en esa regla
+rpart.rules(fit_alumno$fit, cover = TRUE, roundint = FALSE, digits = 3)
+
+# ==============================================================================
+# 8. VISUALIZACIÓN GRÁFICA
+# ==============================================================================
+# Guarda el gráfico para mostrarlo a tu jefe
+rpart.plot(fit_alumno$fit, 
+           type = 4, 
+           extra = 101, 
+           roundint = FALSE,
+           box.palette = "RdGn", # Rojo = Alta Prob Fraude, Verde = Baja
+           main = "Árbol de Reglas de Fraude Intra-Comercio")
+
+
+
+######
+¿Cómo interpretar el resultado final?
+Cuando ejecutes la parte de rpart.rules, verás algo así en la consola:
+score_maestro                                                                 
+    0.982  when tipo_token is GooglePay & prev_es_n7 >= 0.5 & monto > 110
+    0.041  when tipo_token is ApplePay
+    0.015  when tipo_token is NoToken
+
+Traducción para Monitor Plus:
+
+Miras la línea con el score más alto (ej. 0.982 -> 98% probabilidad de fraude).
+
+Lees las condiciones a la derecha.
+
+Escribes la regla:
+
+IF (Token == 'GooglePay') AND (Respuesta_Anterior == 'N7') AND (Monto > 110) THEN ACTION = DECLINE
