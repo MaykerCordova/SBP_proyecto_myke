@@ -1,0 +1,33 @@
+# ==============================================================================
+# 0. SETUP DE LIBRERÍAS
+# ==============================================================================
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+  # Gestión de datos y Archivos
+  tidyverse,      # dplyr, ggplot2, purrr, etc.
+  janitor,        # Limpieza de nombres (clean_names)
+  readxl,         # Leer Excel
+  
+  # Modelado y Machine Learning (Tidymodels)
+  tidymodels,     # Framework principal
+  bonsai,         # CONECTOR CLAVE para LightGBM
+  lightgbm,       # El motor del modelo Maestro
+  
+  # Árboles y Reglas
+  rpart,          # Árbol simple (Alumno)
+  rpart.plot,     # Dibujar el árbol tradicional
+  
+  # Visualización e Interpretación
+  vip,            # Importancia de variables
+  ggdist,         # Raincloud Plots (La lluvia + nube)
+  patchwork,      # Unir varios gráficos en uno solo
+  isotree         # Isolation Forest (Detección de Anomalías rápida)
+)
+
+# OPCIONAL: Para el gráfico de cortes 2D (Si no lo tienes, descomenta para instalar)
+# remotes::install_github("grantmcdermott/parttree")
+library(parttree) 
+
+# Configuración de tema gráfico
+theme_set(theme_minimal())
