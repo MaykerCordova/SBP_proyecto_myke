@@ -31,3 +31,178 @@ library(parttree)
 
 # Configuración de tema gráfico
 theme_set(theme_minimal())
+
+
+
+
+#### eda
+# ==============================================================================
+# FASE 1: EDA (EXPLORATORIO CON DATA ORIGINAL)
+# ==============================================================================
+
+# 1. Cargar y Limpiar
+# ------------------------------------------------------------------------------
+# df_raw <- read_excel("ruta_de_tu_archivo.xlsx") 
+# Simulamos data para que el script corra ahora mismo
+set.seed(123)
+df_raw <- tibble(
+  monto = c(rnorm(400, 50, 20), rnorm(50, 500, 100)), # Normales vs Fraude
+  score_riesgo = c(rnorm(400, 20, 10), rnorm(50, 85, 10)),
+  token = sample(c("Fisico", "ApplePay", "GooglePay"), 450, replace = TRUE, prob = c(0.7, 0.2, 0.1)),
+  fraude_target = c(rep("No", 400), rep("Yes", 50)) # 50 fraudes
+) %>%
+  mutate(fraude_target = as.factor(fraude_target))
+
+# 2. El Gráfico "Raincloud" (Lluvia + Nube + Caja) - EL MEJOR PARA FRAUDE
+# ------------------------------------------------------------------------------
+# Muestra: Dónde se concentra la mayoría (Nube) y cada caso individual (Lluvia)
+plot_rain <- df_raw %>%
+  ggplot(aes(x = fraude_target, y = monto, fill = fraude_target)) +
+  # La Nube (Densidad)
+  stat_halfeye(adjust = 0.5, justification = -0.2, .width = 0, point_colour = NA) +
+  # La Caja (Boxplot)
+  geom_boxplot(width = 0.12, outlier.color = NA, alpha = 0.5) +
+  # La Lluvia (Puntos)
+  stat_dots(side = "left", justification = 1.1, binwidth = 10, dotsize = 0.8) +
+  scale_fill_manual(values = c("No" = "#1f77b4", "Yes" = "#d62728")) +
+  coord_flip() +
+  labs(title = "Análisis de Montos: Raincloud Plot", 
+       subtitle = "Distribución real de montos por tipo de transacción")
+
+print(plot_rain)
+
+# 3. Cruce Categórico (Barras de Infección)
+# ------------------------------------------------------------------------------
+plot_cat <- df_raw %>%
+  count(token, fraude_target) %>%
+  group_by(token) %>%
+  mutate(pct = n / sum(n)) %>%
+  filter(fraude_target == "Yes") %>%
+  ggplot(aes(x = reorder(token, pct), y = pct, fill = token)) +
+  geom_col() +
+  geom_text(aes(label = scales::percent(pct, accuracy = 0.1)), hjust = -0.2) +
+  coord_flip() +
+  labs(title = "% de Fraude por Billetera/Token", y = "Tasa de Fraude") +
+  theme(legend.position = "none")
+
+print(plot_cat)
+
+
+
+👽 Fase 2: No Supervisado (Minería + Extracción de Reglas)
+Aquí aplicamos tu idea genial: Cluster -> Regla. Usamos Isolation Forest para encontrar "cosas raras". A las más raras las etiquetamos como "Cluster Anómalo" y le pedimos a un árbol que nos explique por qué.
+# ==============================================================================
+# FASE 2: NO SUPERVISADO (ANOMALÍAS -> REGLAS)
+# ==============================================================================
+
+# 1. Preparar data numérica para el algoritmo (Isolation Forest solo come números)
+# ------------------------------------------------------------------------------
+df_unsupervised <- df_raw %>%
+  select(monto, score_riesgo) # Agrega aquí más variables numéricas (Hora, etc.)
+
+# 2. Entrenar Isolation Forest
+# ------------------------------------------------------------------------------
+iso_model <- isolation.forest(
+  df_unsupervised, 
+  ndim = 1,      # Cortes simples
+  ntrees = 100   # Número de árboles aleatorios
+)
+
+# 3. Predecir Anomalía (Score de 0 a 1)
+# ------------------------------------------------------------------------------
+# Cerca de 1 = Muy anómalo, Cerca de 0.5 = Normal
+scores_anomalia <- predict(iso_model, df_unsupervised)
+
+# 4. Crear el "Target Artificial" (Cluster de Anomalías)
+# ------------------------------------------------------------------------------
+# Definimos: El Top 5% más raro es nuestro "Cluster de Interés"
+umbral_top_5 <- quantile(scores_anomalia, 0.95)
+
+df_con_cluster <- df_raw %>%
+  mutate(
+    score_anomalo = scores_anomalia,
+    # Aquí está la magia: Convertimos el hallazgo matemático en una etiqueta (1/0)
+    es_atipico = ifelse(score_anomalo >= umbral_top_5, "Si", "No")
+  )
+
+# 5. EL SURROGATE TREE (Extraer la regla del Cluster)
+# ------------------------------------------------------------------------------
+# Entrenamos un árbol para que nos explique el campo "es_atipico"
+arbol_explicativo <- rpart(
+  es_atipico ~ monto + score_riesgo + token, # Usamos variables de negocio
+  data = df_con_cluster,
+  method = "class", # Clasificación (Si/No)
+  control = rpart.control(cp = 0.01, maxdepth = 3)
+)
+
+print("--- REGLA DE LA ANOMALÍA DETECTADA ---")
+rpart.rules(arbol_explicativo, cover = TRUE)
+
+# Visualizar la regla del cluster
+rpart.plot(arbol_explicativo, main = "Reglas que explican el Cluster Anómalo")
+
+
+
+🤖 Fase 3: Supervisado (Maestro LightGBM + Alumno Árbol)
+Aquí integramos todo. Usamos LightGBM para detectar el fraude confirmado y el gráfico 2D que pediste.
+
+# ==============================================================================
+# FASE 3: SUPERVISADO (MAESTRO LIGHTGBM + VISUALIZACIÓN 2D)
+# ==============================================================================
+
+# 1. Preparar Receta
+# ------------------------------------------------------------------------------
+set.seed(123)
+split <- initial_split(df_raw, strata = fraude_target, prop = 0.8)
+train_data <- training(split)
+
+receta_maestro <- recipe(fraude_target ~ ., data = train_data) %>%
+  step_dummy(all_nominal_predictors()) 
+
+# 2. El Maestro LightGBM (Usando bonsai)
+# ------------------------------------------------------------------------------
+spec_lgbm <- boost_tree(
+  trees = 500,
+  tree_depth = 4,
+  min_n = 5,       # Poca data, bajamos el n
+  learn_rate = 0.05
+) %>%
+  set_engine("lightgbm") %>% # Aquí bonsai hace su magia por detrás
+  set_mode("classification")
+
+wf_maestro <- workflow() %>%
+  add_recipe(receta_maestro) %>%
+  add_model(spec_lgbm)
+
+fit_maestro <- fit(wf_maestro, data = train_data)
+
+# 3. El Alumno (Árbol de Reglas) - Para Monitor Plus
+# ------------------------------------------------------------------------------
+# (Aquí iría el código que ya hicimos antes de rpart regresión sobre las probs)
+# ... [Código de destilación previo] ...
+
+# 4. EL GRÁFICO DE PARTICIONES 2D (RECTANGULAR CUTS) 🟩⬛
+# ==============================================================================
+# Este es el gráfico que viste en el video. Muestra cómo el árbol "recorta" el mapa.
+
+# Entrenamos un árbol simple solo con 2 variables para poder dibujarlo en 2D
+arbol_visual <- rpart(
+  fraude_target ~ score_riesgo + monto, 
+  data = train_data,
+  method = "class"
+)
+
+# Opción A: Usando el paquete 'parttree' (Si lograste instalarlo)
+# Muestra las regiones rectangulares de decisión
+grafico_cortes <- ggplot(train_data, aes(x = score_riesgo, y = monto)) +
+  geom_parttree(data = arbol_visual, alpha = 0.3, aes(fill = fraude_target)) + # Las cajas
+  geom_point(aes(col = fraude_target), alpha = 0.7) + # Los puntos reales
+  scale_fill_manual(values = c("No" = "#abdda4", "Yes" = "#fdae61")) +
+  scale_color_manual(values = c("No" = "#2b83ba", "Yes" = "#d7191c")) +
+  labs(title = "Mapa de Decisiones del Árbol (2D)",
+       subtitle = "Cómo el algoritmo 'recorta' el espacio Monyo vs Score")
+
+print(grafico_cortes)
+
+# NOTA: Si 'parttree' falla (porque es de GitHub), rpart.plot es tu respaldo,
+# pero parttree es el que te da la visualización de "mapa de zonas".
