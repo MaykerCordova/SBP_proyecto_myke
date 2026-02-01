@@ -32,7 +32,88 @@ library(parttree)
 # Configuración de tema gráfico
 theme_set(theme_minimal())
 
+### pre pro
+# ==============================================================================
+# FASE 0.5: CARGA Y PROCESAMIENTO INICIAL (Feature Engineering)
+# ==============================================================================
 
+# 1. CARGA DE DATOS CRUDA
+# ------------------------------------------------------------------------------
+# Leemos el archivo y limpiamos los nombres de columnas automáticamente
+# df_import <- read_excel("tu_ruta_del_journal.xlsx") %>% 
+#   clean_names() # Convierte "Monto Transaccion" a "monto_transaccion"
+
+# (Simulación de datos para que el código corra ahora mismo)
+df_import <- tibble(
+  monto = c(150, 500, 20, 1000),
+  score_riesgo = factor(c("0.05", "0.95", "15", "88")), # Viene como Factor sucio
+  reservado_alfa_2 = c("PLIN_001", "APPLE_99", "GOOG_55", "POS_00"), # Tu columna clave
+  acf_bin = c("414165", "515120", "455188", "414165"),
+  fraude_target = c("No", "Yes", "No", "Yes")
+)
+
+# 2. SELECCIÓN DE VARIABLES (EL "INTERRUPTOR")
+# ------------------------------------------------------------------------------
+# OPCIÓN A: Selección Manual (Descomenta esta línea para usarla)
+# variables_a_usar <- c("monto", "score_riesgo", "reservado_alfa_2", "acf_bin", "fraude_target")
+
+# OPCIÓN B: Usar TODO el Journal (Por defecto)
+# La función everything() selecciona todas las columnas disponibles
+variables_a_usar <- everything() 
+
+# Aplicamos la selección
+df_seleccion <- df_import %>%
+  select(all_of(variables_a_usar))
+
+# 3. INGENIERÍA DE VARIABLES (TRANSFORMACIONES)
+# ------------------------------------------------------------------------------
+df_procesado <- df_seleccion %>%
+  mutate(
+    
+    # A. CORRECCIÓN DE TIPOS DE DATOS
+    # ---------------------------------------------------------
+    # El Score suele venir como texto/factor. Lo forzamos a número.
+    score_riesgo = as.numeric(as.character(score_riesgo)),
+    
+    # El BIN debe ser siempre Texto (Factor) para que no lo sume ni reste
+    acf_bin = as.character(acf_bin),
+    
+    # B. CREACIÓN DE LA VARIABLE "TIPO_BILLETERA"
+    # ---------------------------------------------------------
+    # Lógica: Analizar los primeros dígitos de 'reservado_alfa_2' (o la columna que tengas)
+    tipo_billetera = case_when(
+      # Ejemplo: Si empieza con 'APPLE' o ciertos códigos -> Apple Pay
+      str_detect(reservado_alfa_2, "^APPLE") | str_sub(reservado_alfa_2, 1, 5) %in% c("12345", "99999") ~ "Apple Pay",
+      
+      # Ejemplo: Si empieza con 'GOOG' -> Google Pay
+      str_detect(reservado_alfa_2, "^GOOG") ~ "Google Pay",
+      
+      # Ejemplo: Plin
+      str_detect(reservado_alfa_2, "PLIN") ~ "Plin",
+      
+      # Caso por defecto: Si no es nada de lo anterior
+      TRUE ~ "Tarjeta Fisica / Otro"
+    )
+    
+    # C. SEGMENTACIÓN POR BIN (IDEA FUTURA)
+    # ---------------------------------------------------------
+    # Aquí podríamos cruzar con una tabla maestra de BINs para saber si es Classic/Gold/Black.
+    # segmento_tarjeta = case_when(
+    #   acf_bin %in% c("414165", "455120") ~ "Clasica",
+    #   acf_bin %in% c("555555") ~ "Black",
+    #   TRUE ~ "Desconocido"
+    # )
+  )
+
+# 4. INSPECCIÓN RÁPIDA (QUALITY CHECK)
+# ------------------------------------------------------------------------------
+# glimpse() es mejor que str(). Te muestra la variable, el tipo y los primeros datos.
+print("--- ESTRUCTURA DE DATOS PROCESADA ---")
+glimpse(df_procesado)
+
+# Verificamos si se crearon bien las billeteras
+print("--- CONTEO POR BILLETERA ---")
+df_procesado %>% count(tipo_billetera)
 
 
 #### eda
