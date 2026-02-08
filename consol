@@ -1,0 +1,96 @@
+import pandas as pd
+import pyodbc
+import os
+
+# -----------------------------------------------------------------------------
+# CONFIGURACIÓN
+# -----------------------------------------------------------------------------
+archivos = {
+    "Herramienta_A": r"C:\Rutas\Access_Tool_A.accdb",
+    "Herramienta_B": r"C:\Rutas\Access_Tool_B.accdb",
+    "Herramienta_C": r"C:\Rutas\Access_Tool_C.accdb",
+    "Herramienta_D": r"C:\Rutas\Access_Tool_D.accdb"
+}
+
+# Columnas finales deseadas
+columnas_finales = ["ID_Transaccion", "Monto", "BIN", "Pais", "Fecha", "Comercio", "Herramienta_Origen"]
+
+# -----------------------------------------------------------------------------
+# FUNCIÓN DE LECTURA Y LIMPIEZA
+# -----------------------------------------------------------------------------
+def procesar_access(ruta, nombre_herramienta):
+    print(f"Procesando: {nombre_herramienta}...")
+    
+    # String de conexión (Asegúrate que el driver coincida con tu sistema)
+    conn_str = (
+        r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
+        r"DBQ=" + ruta + ";"
+    )
+    
+    try:
+        conn = pyodbc.connect(conn_str)
+        # Ajusta la query para traer solo lo necesario o toda la tabla
+        query = "SELECT * FROM NombreDeLaTablaPrincipal" 
+        df = pd.read_sql(query, conn)
+        conn.close()
+    except Exception as e:
+        print(f"Error leyendo {nombre_herramienta}: {e}")
+        return pd.DataFrame() # Retorna vacío si falla
+
+    # --- Estandarización de Columnas ---
+    # Aquí mapeas: {'Nombre_Viejo': 'Nombre_Nuevo'}
+    # Esto varía por archivo, así que podrías hacer diccionarios específicos si son muy distintos
+    renames = {}
+    
+    # Lógica condicional para renombrar según qué columnas vengan
+    if 'Amount' in df.columns: renames['Amount'] = 'Monto'
+    elif 'Monto_Total' in df.columns: renames['Monto_Total'] = 'Monto'
+        
+    if 'Bin_Card' in df.columns: renames['Bin_Card'] = 'BIN'
+    
+    if 'Trx_Date' in df.columns: renames['Trx_Date'] = 'Fecha'
+    
+    # Aplicar renombre
+    df = df.rename(columns=renames)
+    
+    # Añadir columna de origen
+    df['Herramienta_Origen'] = nombre_herramienta
+    
+    # --- Relleno de columnas faltantes ---
+    # Si la herramienta no tenía 'Pais', creamos la columna con NaN
+    for col in columnas_finales:
+        if col not in df.columns:
+            df[col] = None # O np.nan
+            
+    # Seleccionar solo las columnas finales para asegurar el orden
+    df_final = df[columnas_finales]
+    
+    return df_final
+
+# -----------------------------------------------------------------------------
+# EJECUCIÓN
+# -----------------------------------------------------------------------------
+lista_dfs = []
+
+for nombre, ruta in archivos.items():
+    df_procesado = procesar_access(ruta, nombre)
+    if not df_procesado.empty:
+        lista_dfs.append(df_procesado)
+
+# Unir todo (Concatenar)
+if lista_dfs:
+    df_consolidado = pd.concat(lista_dfs, ignore_index=True)
+    
+    # Verificación
+    print("\nResumen por herramienta:")
+    print(df_consolidado['Herramienta_Origen'].value_counts())
+    
+    # Exportar
+    # Opción A: Parquet (Requiere instalar pyarrow o fastparquet)
+    # df_consolidado.to_parquet("Consolidado_Fraude.parquet", index=False)
+    
+    # Opción B: CSV
+    df_consolidado.to_csv("Consolidado_Fraude.csv", index=False)
+    print("\nArchivo exportado exitosamente.")
+else:
+    print("No se pudieron procesar los datos.")
