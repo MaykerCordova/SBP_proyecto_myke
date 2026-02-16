@@ -1,0 +1,39 @@
+🔥 Paso 1 — Crear lista de palabras prohibidas
+palabras_prohibidas <- c(
+  "nombre",
+  "apellido",
+  "telefono",
+  "celular",
+  "direccion",
+  "email",
+  "correo",
+  "dni",
+  "documento",
+  "ruc",
+  "track",
+  "posicion",
+  "tarjeta",
+  "numero_tarjeta",
+  "pan",
+  "cuenta",
+  "cliente_id",
+  "id_",
+  "fecha_confirmacion",
+  "resultado_caso"
+)
+
+🔥 Paso 2 — Detectar columnas que contengan esos patrones
+cols_a_eliminar <- colnames(df_model_clean)[
+  grepl(paste(palabras_prohibidas, collapse = "|"),
+        colnames(df_model_clean),
+        ignore.case = TRUE)
+]
+
+cols_a_eliminar
+
+
+Eso detecta automáticamente columnas sospechosas.
+
+🔥 Paso 3 — Eliminarlas
+df_model_clean2 <- df_model_clean %>%
+  select(-all_of(cols_a_eliminar))
