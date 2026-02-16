@@ -1,0 +1,143 @@
+=====================================================================
+1️⃣ PREPARACIÓN BASE REAL
+=====================================================================
+
+Asumo que tu dataset unido se llama df_google.
+
+Primero filtramos aprobadas y etiquetas válidas.
+
+library(tidyverse)
+library(tidymodels)
+library(bonsai)
+library(lightgbm)
+library(rpart)
+library(rpart.plot)
+library(vip)
+library(scales)
+
+set.seed(123)
+
+df_base <- df_google %>%
+  filter(indicador_fraude %in% c("F","G","N")) %>%
+  mutate(
+    target = factor(ifelse(indicador_fraude == "F",
+                           "Fraude","NoFraude"),
+                    levels = c("Fraude","NoFraude"))
+  )
+
+=====================================================================
+2️⃣ FUNCIÓN GENERAL DE MODELADO POR TIPO DE TARJETA
+=====================================================================
+run_pipeline <- function(data, tipo_producto){
+
+  cat("=====================================\n")
+  cat("Modelo para:", tipo_producto, "\n")
+  cat("=====================================\n")
+  
+  df <- data %>% filter(tipo_tarjeta == tipo_producto)
+  
+  # Split
+  split <- initial_split(df, strata = target, prop = 0.8)
+  train_data <- training(split)
+  test_data  <- testing(split)
+  
+  # Receta
+  receta <- recipe(target ~ ., data = train_data) %>%
+    update_role(indicador_fraude, new_role = "id") %>%
+    step_rm(indicador_fraude) %>%
+    step_unknown(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>%
+    step_dummy(all_nominal_predictors())
+  
+  # Modelo maestro
+  spec_lgbm <- boost_tree(
+    trees = 800,
+    tree_depth = 6,
+    learn_rate = 0.05,
+    min_n = 20
+  ) %>%
+    set_engine("lightgbm") %>%
+    set_mode("classification")
+  
+  wf <- workflow() %>%
+    add_recipe(receta) %>%
+    add_model(spec_lgbm)
+  
+  fit_maestro <- fit(wf, data = train_data)
+  
+  # ==========================
+  # Evaluación
+  # ==========================
+  
+  preds <- predict(fit_maestro, test_data, type = "prob") %>%
+    bind_cols(test_data)
+  
+  auc_val <- roc_auc(preds, target, .pred_Fraude)$.estimate
+  cat("AUC:", round(auc_val,4), "\n")
+  
+  # ==========================
+  # SCORE COMPLETO
+  # ==========================
+  
+  score_full <- predict(fit_maestro, df, type = "prob")$.pred_Fraude
+  
+  df_score <- df %>%
+    mutate(score = score_full)
+  
+  # ==========================
+  # EVALUACIÓN ECONÓMICA
+  # ==========================
+  
+  df_score <- df_score %>%
+    mutate(score_deciles = ntile(score, 10))
+  
+  resumen <- df_score %>%
+    group_by(score_deciles) %>%
+    summarise(
+      trx = n(),
+      frauds = sum(target == "Fraude"),
+      fraud_rate = frauds / trx,
+      monto_fraud = sum(monto[target == "Fraude"]),
+      expected_loss = monto_fraud / trx
+    ) %>%
+    arrange(desc(score_deciles))
+  
+  print(resumen)
+  
+  # ==========================
+  # DESTILACIÓN
+  # ==========================
+  
+  df_alumno <- df %>%
+    select(-target) %>%
+    mutate(score_maestro = score_full)
+  
+  spec_tree <- decision_tree(
+    tree_depth = 4,
+    min_n = 50,
+    cost_complexity = 0.001
+  ) %>%
+    set_engine("rpart") %>%
+    set_mode("regression")
+  
+  fit_tree <- fit(spec_tree, score_maestro ~ ., data = df_alumno)
+  
+  cat("\nREGLAS EXTRAÍDAS:\n")
+  rpart.rules(fit_tree$fit, cover = TRUE, digits = 3)
+  
+  rpart.plot(fit_tree$fit,
+             type = 4,
+             extra = 101,
+             box.palette = "RdGn",
+             main = paste("Reglas -", tipo_producto))
+  
+  return(list(modelo = fit_maestro,
+              resumen = resumen,
+              arbol = fit_tree))
+}
+
+=====================================================================
+3️⃣ EJECUCIÓN
+=====================================================================
+modelo_credito <- run_pipeline(df_base, "C")
+modelo_debito  <- run_pipeline(df_base, "D")
