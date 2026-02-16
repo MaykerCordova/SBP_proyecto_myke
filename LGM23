@@ -1,0 +1,144 @@
+🔵 1️⃣ Concepto clave
+
+LightGBM directo trabaja con:
+
+lgb.Dataset()
+lgb.train()
+
+
+Y requiere:
+
+Matriz numérica
+
+Vector label (0/1)
+
+Nada más.
+
+🔥 2️⃣ Pipeline completo para tu caso (fraude aprobado)
+
+Voy a asumir que:
+
+Tu target binario ya está creado
+
+Solo trabajas con aprobadas
+
+Ya eliminaste D y P
+
+Ya eliminaste PII e IDs
+
+🧩 PASO 1 — Preparar target binario
+df_model <- df_base %>%
+  filter(!indicador_fraude %in% c("D","P")) %>%
+  mutate(
+    target = ifelse(indicador_fraude == "F", 1, 0)
+  )
+
+🧩 PASO 2 — Eliminar columnas que no deben modelarse
+
+Ejemplo:
+
+df_model <- df_model %>%
+  select(-indicador_fraude,
+         -trx_id,
+         -cliente_id,
+         -nombre,
+         -apellido)
+
+
+(ajusta según tu base)
+
+🧩 PASO 3 — Convertir categóricas
+
+LightGBM acepta categóricas si las pasas como factores.
+
+Pero internamente convertirá todo a matriz.
+
+Entonces hacemos:
+
+df_model <- df_model %>%
+  mutate(across(where(is.character), as.factor))
+
+🧩 PASO 4 — Crear matriz X y vector y
+y <- df_model$target
+X <- df_model %>% select(-target)
+
+# Convertir factores a numeric (entero)
+X <- X %>%
+  mutate(across(where(is.factor), as.integer))
+
+X_matrix <- as.matrix(X)
+
+🔵 3️⃣ Crear dataset LightGBM
+library(lightgbm)
+
+dtrain <- lgb.Dataset(
+  data = X_matrix,
+  label = y
+)
+
+🔵 4️⃣ Definir parámetros
+params <- list(
+  objective = "binary",
+  metric = "auc",
+  learning_rate = 0.05,
+  num_leaves = 31,
+  max_depth = -1,
+  min_data_in_leaf = 50,
+  feature_fraction = 0.8,
+  bagging_fraction = 0.8,
+  bagging_freq = 5,
+  verbose = -1
+)
+
+🔵 5️⃣ Entrenar modelo
+modelo_lgb <- lgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 500,
+  early_stopping_rounds = 50,
+  verbose = 1
+)
+
+🔵 6️⃣ Predicciones
+pred <- predict(modelo_lgb, X_matrix)
+
+
+Eso te devuelve probabilidad de fraude.
+
+🔵 7️⃣ Evaluar AUC
+library(pROC)
+
+auc(y, pred)
+
+🔥 8️⃣ Extraer importancia de variables
+importance <- lgb.importance(modelo_lgb)
+print(importance)
+
+lgb.plot.importance(importance, top_n = 20)
+
+
+Aquí es donde empieza la magia real.
+
+🔥 9️⃣ Ahora viene lo interesante (destilación)
+
+Después puedes hacer:
+
+df_alumno <- X
+df_alumno$score_maestro <- pred
+
+
+Y entrenar tu árbol simple con rpart:
+
+library(rpart)
+
+alumno <- rpart(
+  score_maestro ~ .,
+  data = df_alumno,
+  method = "anova",
+  control = rpart.control(maxdepth = 4, minsplit = 100)
+)
+
+
+Y extraer reglas:
+
+rpart.plot::rpart.plot(alumno)
