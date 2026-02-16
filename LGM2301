@@ -1,0 +1,117 @@
+🔵 1️⃣ Cargar librerías
+library(dplyr)
+library(lightgbm)
+library(pROC)
+
+🔵 2️⃣ Preparar base general
+df_model <- df_base %>%
+  filter(!indicador_fraude %in% c("D","P")) %>%
+  mutate(
+    target = ifelse(indicador_fraude == "F", 1, 0)
+  ) %>%
+  select(-indicador_fraude)
+
+🔵 3️⃣ Separar crédito y débito
+df_credito <- df_model %>% filter(tipo_tarjeta == "C")
+df_debito  <- df_model %>% filter(tipo_tarjeta == "D")
+
+🔵 4️⃣ Función completa para entrenar LightGBM directo
+entrenar_lgb_directo <- function(df_input){
+
+  # Eliminar target de X
+  y <- df_input$target
+  X <- df_input %>% select(-target)
+
+  # Convertir character a factor
+  X <- X %>% mutate(across(where(is.character), as.factor))
+
+  # Convertir factores a integer (LightGBM necesita matriz numérica)
+  X <- X %>% mutate(across(where(is.factor), as.integer))
+
+  # Convertir a matriz
+  X_matrix <- as.matrix(X)
+
+  # Split manual 80/20
+  n <- nrow(X_matrix)
+  train_index <- sample(1:n, size = 0.8*n)
+
+  dtrain <- lgb.Dataset(
+    data = X_matrix[train_index, ],
+    label = y[train_index]
+  )
+
+  dtest <- lgb.Dataset(
+    data = X_matrix[-train_index, ],
+    label = y[-train_index]
+  )
+
+  params <- list(
+    objective = "binary",
+    metric = "auc",
+    learning_rate = 0.05,
+    num_leaves = 31,
+    max_depth = -1,
+    min_data_in_leaf = 50,
+    feature_fraction = 0.8,
+    bagging_fraction = 0.8,
+    bagging_freq = 5
+  )
+
+  modelo <- lgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = 800,
+    valids = list(test = dtest),
+    early_stopping_rounds = 50,
+    verbose = 1
+  )
+
+  # Predicciones
+  pred <- predict(modelo, X_matrix[-train_index, ])
+
+  auc_score <- auc(y[-train_index], pred)
+
+  print(paste("AUC:", round(auc_score,4)))
+
+  return(list(
+    modelo = modelo,
+    auc = auc_score
+  ))
+}
+
+🔵 5️⃣ Entrenar modelos separados
+cat("=== MODELO CRÉDITO ===\n")
+modelo_credito <- entrenar_lgb_directo(df_credito)
+
+cat("=== MODELO DÉBITO ===\n")
+modelo_debito  <- entrenar_lgb_directo(df_debito)
+
+🔵 6️⃣ Importancia de variables
+importance_credito <- lgb.importance(modelo_credito$modelo)
+importance_debito  <- lgb.importance(modelo_debito$modelo)
+
+lgb.plot.importance(importance_credito, top_n = 20)
+lgb.plot.importance(importance_debito, top_n = 20)
+
+🔵 7️⃣ Destilación (opcional)
+library(rpart)
+library(rpart.plot)
+
+X_credito <- df_credito %>%
+  select(-target) %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  mutate(across(where(is.factor), as.integer))
+
+score_credito <- predict(modelo_credito$modelo, as.matrix(X_credito))
+
+df_alumno_credito <- X_credito
+df_alumno_credito$score_maestro <- score_credito
+
+alumno_credito <- rpart(
+  score_maestro ~ .,
+  data = df_alumno_credito,
+  method = "anova",
+  control = rpart.control(maxdepth = 4, minsplit = 100)
+)
+
+rpart.plot(alumno_credito)
