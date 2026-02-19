@@ -1,0 +1,261 @@
+Perfecto. Vamos a cerrar esto con un pipeline completo, robusto y seguro, usando las dos estrategias seguras que definimos:
+
+🔐 Si hay timestamp completo → incremental por > last_timestamp
+
+🔐 Si solo hay fecha → ventana de seguridad (reprocesar último día)
+
+Sin recalificaciones todavía.
+Solo carga diaria robusta + modelo estrella + SQLite persistente.
+
+🧱 ARQUITECTURA FINAL (Operativa para mañana)
+Access / Excel
+      ↓
+Python ETL incremental seguro
+      ↓
+SQLite (fraude_dw.sqlite)
+      ↓
+Power BI
+
+🔹 1️⃣ CONFIGURACIÓN GLOBAL
+import pandas as pd
+import pyodbc
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+DB_PATH = "fraude_dw.sqlite"
+
+STANDARD_COLUMNS = [
+    "fecha",
+    "monto",
+    "comercio",
+    "bin",
+    "entry_mode",
+    "herramienta"
+]
+
+🔹 2️⃣ CONFIGURACIÓN POR HERRAMIENTA
+
+⚠ Siempre especificar formato de fecha y fecha mínima.
+
+TOOL_CONFIG = {
+    "FRM": {
+        "table": "tabla_frm",
+        "column_map": {
+            "fecha": "fecha_operacion",
+            "monto": "monto_dolar_original",
+            "comercio": "nombre_comercio",
+            "bin": "bin_tarjeta",
+            "entry_mode": "acf_entry_mode"
+        },
+        "fecha_format": "%d/%m/%Y",
+        "min_date": "2025-01-01",
+        "has_timestamp": False
+    },
+
+    "BRM": {
+        "table": "tabla_brm",
+        "column_map": {
+            "fecha": "fecha_brm",
+            "monto": "monto_dolares",
+            "comercio": "merchant_name",
+            "bin": "bin_code",
+            "entry_mode": "entry_mode"
+        },
+        "fecha_format": "%Y-%m-%d",
+        "min_date": "2025-01-01",
+        "has_timestamp": True
+    }
+}
+
+🔹 3️⃣ FUNCIÓN PARA OBTENER ÚLTIMA FECHA CARGADA
+def get_last_timestamp(tool_name):
+
+    conn = sqlite3.connect(DB_PATH)
+
+    query = f"""
+        SELECT MAX(fecha)
+        FROM fact_rechazos
+        WHERE herramienta = '{tool_name}'
+    """
+
+    result = conn.execute(query).fetchone()[0]
+    conn.close()
+
+    return result
+
+🔹 4️⃣ LECTURA ACCESS INCREMENTAL SEGURA
+def read_access_incremental(tool_name, access_path):
+
+    config = TOOL_CONFIG[tool_name]
+    table = config["table"]
+    fecha_col = config["column_map"]["fecha"]
+    has_timestamp = config["has_timestamp"]
+
+    conn_str = (
+        r"Driver={Microsoft Access Driver (*.mdb, *.accdb)};"
+        rf"DBQ={access_path};"
+    )
+
+    conn = pyodbc.connect(conn_str)
+
+    last_timestamp = get_last_timestamp(tool_name)
+
+    if last_timestamp is None:
+        # Primera carga
+        query = f"SELECT * FROM {table}"
+    else:
+        if has_timestamp:
+            # Incremental exacto por timestamp
+            query = f"""
+                SELECT *
+                FROM {table}
+                WHERE {fecha_col} > #{last_timestamp}#
+            """
+        else:
+            # Ventana de seguridad (reprocesar último día)
+            safe_date = pd.to_datetime(last_timestamp) - pd.Timedelta(days=1)
+            safe_date_str = safe_date.strftime("%Y-%m-%d")
+
+            query = f"""
+                SELECT *
+                FROM {table}
+                WHERE {fecha_col} >= #{safe_date_str}#
+            """
+
+    df = pd.read_sql(query, conn)
+    conn.close()
+
+    return df
+
+🔹 5️⃣ HOMOLOGACIÓN ROBUSTA
+def standardize(df, tool_name):
+
+    config = TOOL_CONFIG[tool_name]
+    col_map = config["column_map"]
+    fecha_format = config["fecha_format"]
+    min_date = pd.to_datetime(config["min_date"])
+
+    rename_dict = {
+        original: new
+        for new, original in col_map.items()
+        if original in df.columns
+    }
+
+    df_std = df.rename(columns=rename_dict)
+
+    for col in STANDARD_COLUMNS:
+        if col not in df_std.columns:
+            df_std[col] = None
+
+    df_std = (
+        df_std
+        .assign(
+            herramienta=tool_name,
+            fecha=lambda x: pd.to_datetime(
+                x["fecha"],
+                format=fecha_format,
+                errors="coerce"
+            ),
+            monto=lambda x: pd.to_numeric(x["monto"], errors="coerce"),
+            comercio=lambda x: x["comercio"].astype("string"),
+            bin=lambda x: x["bin"].astype("string"),
+            entry_mode=lambda x: x["entry_mode"]
+                .fillna("DESCONOCIDO")
+                .astype("string")
+        )
+        .query("fecha >= @min_date")
+        [STANDARD_COLUMNS]
+    )
+
+    assert df_std["fecha"].notna().all(), \
+        f"Error parsing fecha {tool_name}"
+
+    return df_std
+
+🔹 6️⃣ INSERTAR EN SQLITE (CONTROL POR HERRAMIENTA)
+def insert_into_sqlite(df, tool_name):
+
+    conn = sqlite3.connect(DB_PATH)
+
+    # Si usamos ventana de seguridad, borrar ese rango primero
+    if not TOOL_CONFIG[tool_name]["has_timestamp"]:
+        last_timestamp = get_last_timestamp(tool_name)
+
+        if last_timestamp:
+            safe_date = pd.to_datetime(last_timestamp) - pd.Timedelta(days=1)
+            safe_date_str = safe_date.strftime("%Y-%m-%d")
+
+            conn.execute(f"""
+                DELETE FROM fact_rechazos
+                WHERE herramienta = '{tool_name}'
+                AND fecha >= '{safe_date_str}'
+            """)
+
+    df.to_sql(
+        "fact_rechazos",
+        conn,
+        if_exists="append",
+        index=False
+    )
+
+    conn.commit()
+    conn.close()
+
+🔹 7️⃣ MODELO ESTRELLA (LIGERO PARA POWER BI)
+def create_dimensions():
+
+    conn = sqlite3.connect(DB_PATH)
+
+    df = pd.read_sql("SELECT * FROM fact_rechazos", conn)
+
+    dim_fecha = (
+        df[["fecha"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+        .assign(fecha_key=lambda x: x.index + 1)
+    )
+
+    dim_herramienta = (
+        df[["herramienta"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+        .assign(herramienta_key=lambda x: x.index + 1)
+    )
+
+    dim_comercio = (
+        df[["comercio"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+        .assign(comercio_key=lambda x: x.index + 1)
+    )
+
+    dim_bin = (
+        df[["bin"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+        .assign(bin_key=lambda x: x.index + 1)
+    )
+
+    conn.close()
+
+    return dim_fecha, dim_herramienta, dim_comercio, dim_bin
+
+🔹 8️⃣ PIPELINE COMPLETO
+def run_pipeline():
+
+    for tool_name in TOOL_CONFIG.keys():
+
+        df_raw = read_access_incremental(
+            tool_name,
+            f"data/{tool_name.lower()}.accdb"
+        )
+
+        if df_raw.empty:
+            continue
+
+        df_std = standardize(df_raw, tool_name)
+
+        insert_into_sqlite(df_std, tool_name)
+
+    print("Carga incremental completada.")
